@@ -23,7 +23,10 @@
       { id: '1', name: 'Standard Cold Email', subject: 'Prospective PhD Student - {{my_name}}', body: 'Dear Prof. {{prof_lastName}},\n\nI am a prospective PhD student interested in your work at {{univ_name}}, specifically in {{research_area}}.\n\nI recently read your paper on [insert paper here] and was fascinated by the approach. I would love to discuss potential opportunities in your lab.\n\nBest regards,\n{{my_name}}' }
     ],
     activeTemplateId: '1',
-    applications: JSON.parse(localStorage.getItem('profscout_applications')) || {}
+    applications: JSON.parse(localStorage.getItem('profscout_applications')) || {},
+    settings: JSON.parse(localStorage.getItem('profscout_settings')) || {
+      apiKey: '', userName: '', userBackground: ''
+    }
   };
 
   // ===== Local Storage =====
@@ -32,6 +35,9 @@
   }
   function saveApplications() {
     localStorage.setItem('profscout_applications', JSON.stringify(state.applications));
+  }
+  function saveSettings() {
+    localStorage.setItem('profscout_settings', JSON.stringify(state.settings));
   }
 
   // ===== Data Loader =====
@@ -108,6 +114,44 @@
     document.getElementById('app-modal').addEventListener('click', (e) => {
       if (e.target.id === 'app-modal') closeModal();
     });
+    const settingsBtn = document.getElementById('nav-settings-btn');
+    if (settingsBtn) {
+      settingsBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        openSettingsModal();
+      });
+    }
+  }
+
+  function openSettingsModal() {
+    const bodyHtml = `
+      <div class="form-group">
+        <label class="form-label">OpenAI API Key</label>
+        <input type="password" class="form-input" id="setting-api-key" value="${escapeHtml(state.settings.apiKey)}" placeholder="sk-...">
+        <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Stored locally in your browser.</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Your Name</label>
+        <input type="text" class="form-input" id="setting-name" value="${escapeHtml(state.settings.userName)}" placeholder="e.g. Jane Doe">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Your Background & Interests</label>
+        <textarea class="form-textarea" id="setting-background" placeholder="e.g. I am a master's student with 2 years of research experience in computer vision..." style="min-height: 80px">${escapeHtml(state.settings.userBackground)}</textarea>
+      </div>
+    `;
+    const footerHtml = `
+      <button class="btn btn-secondary" id="modal-cancel-btn">Cancel</button>
+      <button class="btn btn-primary" id="modal-save-settings-btn">Save Settings</button>
+    `;
+    openModal('Settings', bodyHtml, footerHtml);
+    document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
+    document.getElementById('modal-save-settings-btn').addEventListener('click', () => {
+      state.settings.apiKey = document.getElementById('setting-api-key').value.trim();
+      state.settings.userName = document.getElementById('setting-name').value.trim();
+      state.settings.userBackground = document.getElementById('setting-background').value.trim();
+      saveSettings();
+      closeModal();
+    });
   }
 
   function openModal(title, bodyHtml, footerHtml) {
@@ -182,6 +226,9 @@
     `;
 
     const footerHtml = `
+      <div style="flex:1">
+        <button class="btn btn-secondary ai-btn" id="modal-ai-btn">✨ Generate with AI</button>
+      </div>
       <button class="btn btn-secondary" id="modal-cancel-btn">Cancel</button>
       <button class="btn btn-primary" id="modal-send-btn">Open in Email Client</button>
     `;
@@ -201,6 +248,72 @@
       window.open(`mailto:?subject=${sub}&body=${bod}`);
       closeModal();
     });
+    document.getElementById('modal-ai-btn').addEventListener('click', (e) => {
+      const subjectInput = document.getElementById('email-preview-subject');
+      const bodyInput = document.getElementById('email-preview-body');
+      generateEmailWithAI(prof, profAreasStr, subjectInput, bodyInput, e.target);
+    });
+  }
+
+  async function generateEmailWithAI(prof, profAreasStr, subjectInput, bodyInput, btn) {
+    if (!state.settings.apiKey) {
+      alert('Please configure your OpenAI API Key in Settings first.');
+      closeModal();
+      openSettingsModal();
+      return;
+    }
+    
+    btn.disabled = true;
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="btn-spinner"></span> Generating...';
+
+    try {
+      const systemPrompt = "You are an expert academic advisor helping a prospective grad student write a cold email to a professor. The email must be concise (under 150 words), professional, and highly specific to the professor's research. Avoid cliches. Output ONLY a JSON object with 'subject' and 'body' keys.";
+      const userPrompt = \`
+Student: \${state.settings.userName || '[Student Name]'}
+Student Background: \${state.settings.userBackground || 'Interested in CS research.'}
+Professor: \${prof.n} at \${prof.a}
+Professor's Focus Areas: \${profAreasStr}
+Instructions: Draft the cold email. Do not use bracketed placeholders.
+      \`;
+
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': \`Bearer \${state.settings.apiKey}\`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          response_format: { type: 'json_object' }
+        })
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error?.message || 'API request failed');
+      }
+
+      const data = await response.json();
+      const result = JSON.parse(data.choices[0].message.content);
+      
+      subjectInput.value = result.subject || 'Prospective PhD Student';
+      bodyInput.value = result.body || '';
+      
+      // Select custom option in dropdown to indicate template override
+      const select = document.getElementById('email-template-select');
+      select.value = '';
+    } catch (err) {
+      console.error(err);
+      alert('Failed to generate AI draft: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
   }
 
   function toggleTrackProfessor(prof) {

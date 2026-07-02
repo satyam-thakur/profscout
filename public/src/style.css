@@ -1197,6 +1197,25 @@ a:hover { color: #a5b4fc; }
   color: #6ee7b7;
 }
 
+.ai-btn {
+  background: linear-gradient(135deg, #8b5cf6, #3b82f6);
+  color: white;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-btn:hover:not(:disabled) { box-shadow: 0 0 12px rgba(139,92,246,0.4); }
+.ai-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.btn-spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+}
+
 /* ===== Responsive ===== */
 @media (max-width: 768px) {
   .header-inner { padding: 0 var(--space-md); gap: var(--space-sm); }
