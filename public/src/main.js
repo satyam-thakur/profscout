@@ -269,19 +269,19 @@
 
     try {
       const systemPrompt = "You are an expert academic advisor helping a prospective grad student write a cold email to a professor. The email must be concise (under 150 words), professional, and highly specific to the professor's research. Avoid cliches. Output ONLY a JSON object with 'subject' and 'body' keys.";
-      const userPrompt = \`
-Student: \${state.settings.userName || '[Student Name]'}
-Student Background: \${state.settings.userBackground || 'Interested in CS research.'}
-Professor: \${prof.n} at \${prof.a}
-Professor's Focus Areas: \${profAreasStr}
+      const userPrompt = `
+Student: ${state.settings.userName || '[Student Name]'}
+Student Background: ${state.settings.userBackground || 'Interested in CS research.'}
+Professor: ${prof.n} at ${prof.a}
+Professor's Focus Areas: ${profAreasStr}
 Instructions: Draft the cold email. Do not use bracketed placeholders.
-      \`;
+      `;
 
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': \`Bearer \${state.settings.apiKey}\`
+          'Authorization': `Bearer ${state.settings.apiKey}`
         },
         body: JSON.stringify({
           model: 'gpt-4o-mini',
