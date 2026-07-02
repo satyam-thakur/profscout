@@ -10,14 +10,6 @@ An open-source platform to help PhD/MS applicants discover 34,000+ CS professors
 
 ---
 
-## Features
-
-| Page | Description |
-|------|-------------|
-| **Discover** | Search & filter 34,000+ professors by name, university, research area, country, and publication count |
-| **Stipends** | Visual dashboard comparing 82 US university PhD stipends vs. cost of living with sortable tables and bar charts |
-| **Match** | Select your research interests and get ranked professor recommendations with match scores |
-
 ### Data Sources
 
 - **[CSrankings](https://csrankings.org)** — Faculty names, affiliations, homepages, Google Scholar IDs, and publication records at top CS venues
@@ -154,19 +146,6 @@ To pull the latest data from CSrankings and CSStipendRankings:
 git submodule update --remote --merge
 python scripts/build_data.py
 ```
-
----
-
-## Roadmap
-
-- [x] **v0.1** — Professor Discovery (search, filter, sort)
-- [x] **v0.2** — Stipend Dashboard (charts, tables, comparisons)
-- [x] **v0.3** — Research Interest Matcher (scoring algorithm)
-- [ ] **v0.4** — Email Template Engine (merge fields, personalization)
-- [ ] **v0.5** — Application Tracker (kanban board, status tracking)
-- [ ] **v1.0** — AI Email Generation (OpenAI integration)
-- [ ] **v1.1** — Gmail/SMTP email sending via API
-- [ ] **v1.2** — GitHub Actions for automated data updates
 
 ---
 
