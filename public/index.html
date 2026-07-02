@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ProfScout — Discover Professors, Match Research, Compare Stipends</title>
+  <meta name="description" content="Open-source platform to discover 34,000+ CS professors, match research interests, compare PhD stipends, and generate personalized cold emails for PhD/MS applicants.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="app-header" id="app-header">
+      <div class="header-inner">
+        <a href="#/" class="logo" id="logo">
+          <span class="logo-icon">&#9672;</span>
+          <span class="logo-text">Prof<span class="accent">Scout</span></span>
+        </a>
+        <nav class="nav" id="main-nav">
+          <a href="#/discover" class="nav-link" data-page="discover" id="nav-discover">
+            <span class="nav-icon">&#128270;</span> Discover
+          </a>
+          <a href="#/stipends" class="nav-link" data-page="stipends" id="nav-stipends">
+            <span class="nav-icon">&#128176;</span> Stipends
+          </a>
+          <a href="#/match" class="nav-link" data-page="match" id="nav-match">
+            <span class="nav-icon">&#129517;</span> Match
+          </a>
+        </nav>
+        <div class="header-stats" id="header-stats">
+          <span class="stat-badge" id="stat-professors">Loading...</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content" id="main-content">
+      <!-- Loading State -->
+      <div class="loading-screen" id="loading-screen">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">Loading 34,000+ professors...</p>
+        <div class="loading-bar"><div class="loading-bar-fill" id="loading-bar-fill"></div></div>
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer" id="app-footer">
+      <p>ProfScout &mdash; Open-source professor discovery platform. Data from
+        <a href="https://csrankings.org" target="_blank" rel="noopener">CSrankings</a> &amp;
+        <a href="https://csstipendrankings.org" target="_blank" rel="noopener">CSStipendRankings</a>
+        (CC BY-NC-ND 4.0).
+      </p>
+    </footer>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

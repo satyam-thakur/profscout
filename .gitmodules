@@ -1,0 +1,9 @@
+[submodule "data/CSStipendRankings"]
+	path = data/CSStipendRankings
+	url = https://github.com/CSStipendRankings/CSStipendRankings.git
+	shallow = true
+
+[submodule "data/CSrankings"]
+	path = data/CSrankings
+	url = https://github.com/emeryberger/CSrankings.git
+	shallow = true
