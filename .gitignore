@@ -37,4 +37,4 @@ Desktop.ini
 # Root-level submodule artifacts from parent repo
 /CSrankings/
 /CSStipendRankings/
-/main.py
+/data/user_data.db

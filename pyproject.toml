@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Professor discovery, stipend analysis, and research matching platform for PhD/MS applicants"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["fastapi", "uvicorn"]
 
 [project.scripts]
 build-data = "scripts.build_data:main"

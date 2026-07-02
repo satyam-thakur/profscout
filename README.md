@@ -12,10 +12,21 @@ An open-source platform to help PhD/MS applicants discover 34,000+ CS professors
 
 ### Data Sources
 
-- **[CSrankings](https://csrankings.org)** — Faculty names, affiliations, homepages, Google Scholar IDs, and publication records at top CS venues
-- **[CSStipendRankings](https://csstipendrankings.org)** — PhD stipend amounts, fees, and cost of living data for US universities
+- **[CSrankings](https://csrankings.org)** — Faculty names, affiliations, homepages, Google Scholar IDs, and publication records at top CS venues (34k+ locally stored).
+- **[CSStipendRankings](https://csstipendrankings.org)** — PhD stipend amounts, fees, and cost of living data for US universities.
+- **[OpenAlex API](https://openalex.org/)** — Live global API search spanning millions of researchers across *all* STEM fields (Mechanical Engineering, Biology, Physics, etc.).
 
-Both datasets are included as git submodules under `data/`.
+Both local datasets are included as git submodules under `data/`.
+
+---
+
+## Features
+
+- 🔍 **Global Discovery**: Search locally through 34,000+ CS faculty or toggle "Global STEM" to search millions of non-CS faculty live via OpenAlex.
+- 💰 **Stipend Dashboard**: Compare PhD stipends vs. living costs across 82 top US universities.
+- 🤖 **AI Email Generator**: Select a professor, pick a template, and instantly generate a highly personalized cold email using OpenAI's GPT-4o.
+- 📬 **Local SMTP & IMAP Sync**: Schedule emails to be sent at specific times right from your machine. Emails are automatically pushed to your Gmail `ProfScout Scheduled` and `ProfScout Sent` folders to stay perfectly in sync.
+- 📋 **Application Kanban Tracker**: Save professors to a Trello-style board and drag-and-drop them across stages (Saved, Contacted, Interviewing, Accepted).
 
 ---
 
@@ -45,7 +56,7 @@ git submodule update --init --recursive
 Using **uv** (recommended):
 
 ```bash
-uv venv
+uv sync
 # Windows
 .venv\Scripts\activate
 # macOS/Linux
@@ -60,6 +71,9 @@ python -m venv .venv
 .venv\Scripts\activate
 # macOS/Linux
 source .venv/bin/activate
+
+# Install dependencies
+pip install -e .
 ```
 
 ### 3. Build the Data
@@ -97,7 +111,9 @@ ProfScout Data Pipeline
 ============================================================
 ```
 
-### 4. Start the Dev Server
+### 4. Start the Backend Server
+
+ProfScout runs a fast, lightweight FastAPI backend to serve the web UI and manage your local SQLite database (for saving your tracked professors, email templates, and SMTP credentials).
 
 ```bash
 # Windows
@@ -109,7 +125,8 @@ python scripts/serve.py
 
 ### 5. Open in Browser
 
-Navigate to **http://localhost:8080** and start exploring!
+Navigate to **http://localhost:8080** and start exploring! 
+Go to **Settings** in the top right to configure your OpenAI API Key and Gmail SMTP settings so you can generate and send emails directly from the app!
 
 ---
 
@@ -124,8 +141,8 @@ profscout/
 │   └── CSStipendRankings/   # Stipend & living cost data
 ├── scripts/
 │   ├── build_data.py        # CSV → JSON data pipeline
-│   └── serve.py             # Local dev server (port 8080)
-└── public/                  # Static frontend (served by dev server)
+│   └── serve.py             # FastAPI backend server (port 8080)
+└── public/                  # Static frontend (served by FastAPI)
     ├── index.html           # Main HTML shell
     ├── data/                # Generated JSON files (from build_data.py)
     │   ├── professors.json  # 34K+ professor records

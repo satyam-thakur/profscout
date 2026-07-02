@@ -3,6 +3,156 @@
 
 (function() {
   'use strict';
+  
+  let isFirstLoad = true;
+  let hasScrolledData = false;
+  
+  // ===== Theme Management =====
+  const toggleBtn = document.getElementById('theme-toggle');
+  const root = document.documentElement;
+  
+  // Default to system preference, overridden by localStorage if set
+  let isLightMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+  if (localStorage.getItem('theme') === 'light') isLightMode = true;
+  if (localStorage.getItem('theme') === 'dark') isLightMode = false;
+
+  function applyTheme() {
+    if (isLightMode) {
+      root.setAttribute('data-theme', 'light');
+      toggleBtn.innerHTML = '🌙';
+      toggleBtn.title = "Switch to Dark Mode";
+    } else {
+      root.setAttribute('data-theme', 'dark');
+      toggleBtn.innerHTML = '☀️';
+      toggleBtn.title = "Switch to Light Mode";
+    }
+  }
+  applyTheme();
+
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      isLightMode = !isLightMode;
+      localStorage.setItem('theme', isLightMode ? 'light' : 'dark');
+      applyTheme();
+    });
+  }
+
+  // Listen for system theme changes if user hasn't overridden
+  window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
+    if (!localStorage.getItem('theme')) {
+      isLightMode = e.matches;
+      applyTheme();
+    }
+  });
+
+  // ===== Mail Page =====
+  function renderOutboxPage() {
+    return `
+      <div class="page-header" style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <h1 class="page-title">Mail</h1>
+          <div style="color:var(--text-muted); margin-top:0.5rem; font-size:0.9rem;">Emails are synced directly with your Gmail.</div>
+        </div>
+        <button class="btn btn-secondary" id="sync-gmail-btn">Sync Gmail Status</button>
+      </div>
+      
+      <h2 style="margin-top: 1rem; margin-bottom: 1rem; font-size: 1.2rem; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">Scheduled Emails</h2>
+      <div style="background-color: rgba(255, 152, 0, 0.1); border-left: 4px solid var(--accent-3); padding: 1rem; margin-bottom: 1rem; border-radius: 4px; color: var(--text-primary);">
+        <strong>⚠️ Important Note:</strong> Gmail does not natively support API scheduling. These emails are scheduled <strong>locally</strong>. Your Python terminal server (<code>serve.py</code>) <strong>must remain running</strong> at the scheduled time in order for the emails to be sent!
+      </div>
+      <div id="outbox-scheduled-list" class="tracker-grid">
+        <div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted);">Loading...</div>
+      </div>
+      
+      <h2 style="margin-top: 2rem; margin-bottom: 1rem; font-size: 1.2rem; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">Sent Emails</h2>
+      <div id="outbox-sent-list" class="tracker-grid">
+        <div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted);">Loading...</div>
+      </div>
+    `;
+  }
+  
+  async function initOutboxPage() {
+    const scheduledListEl = document.getElementById('outbox-scheduled-list');
+    const sentListEl = document.getElementById('outbox-sent-list');
+    
+    document.getElementById('sync-gmail-btn')?.addEventListener('click', async (e) => {
+      const btn = e.target;
+      btn.textContent = 'Syncing...';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/sync-imap', { method: 'POST' });
+        if (res.ok) {
+          const data = await res.json();
+          alert('✅ ' + data.message);
+          initOutboxPage();
+        } else {
+          alert('❌ Failed to sync with Gmail.');
+          btn.textContent = 'Sync Gmail Status';
+          btn.disabled = false;
+        }
+      } catch (err) {
+        alert('❌ Network error during sync.');
+        btn.textContent = 'Sync Gmail Status';
+        btn.disabled = false;
+      }
+    });
+
+    try {
+      const res = await fetch('/api/outbox');
+      const data = await res.json();
+      const outbox = data.outbox || [];
+      
+      const scheduled = outbox.filter(e => e.status === 'pending');
+      const sent = outbox.filter(e => e.status !== 'pending');
+      
+      const renderEmailCard = (email) => {
+        const d = new Date(email.sendAt);
+        const statusColor = email.status === 'sent' ? 'var(--accent-4)' : (email.status === 'failed' ? 'var(--accent-danger)' : 'var(--accent-5)');
+        return `
+          <div class="prof-card">
+            <h3 class="prof-name" style="font-size:1.1rem; margin-bottom: 0.5rem;">To: ${escapeHtml(email.profName || email.to)}</h3>
+            <div style="color:var(--text-muted); font-size:0.85rem; margin-bottom: 0.5rem;">${escapeHtml(email.to)}</div>
+            <div class="prof-uni" style="color:var(--text-primary); margin-bottom: 0.5rem;"><strong>Subject:</strong> ${escapeHtml(email.subject)}</div>
+            <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom: 1rem;">
+              <strong>Scheduled for:</strong> ${d.toLocaleString()}<br>
+              <strong>Status:</strong> <span style="color:${statusColor}">${email.status.toUpperCase()}</span>
+              ${email.errorMsg ? '<br><span style="color:var(--accent-danger)">Error: ' + escapeHtml(email.errorMsg) + '</span>' : ''}
+            </div>
+            <div style="display:flex; gap:0.5rem;">
+              <a href="https://mail.google.com/mail/u/0/#search/rfc822msgid%3A%3C${email.id}%40profscout.local%3E" target="_blank" class="btn btn-primary" style="text-decoration:none; display:inline-block; font-size: 0.8rem; padding: 4px 8px;" title="View in Gmail">📧 Gmail</a>
+              ${email.status === 'pending' ? `<button class="btn btn-secondary" onclick="cancelEmail('${email.id}')" style="font-size: 0.8rem; padding: 4px 8px;">Cancel</button>` : ''}
+            </div>
+          </div>
+        `;
+      };
+      
+      if (scheduled.length === 0) {
+        scheduledListEl.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 1rem;">No scheduled emails.</div>';
+      } else {
+        scheduledListEl.innerHTML = scheduled.map(renderEmailCard).join('');
+      }
+      
+      if (sent.length === 0) {
+        sentListEl.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 1rem;">No sent emails found.</div>';
+      } else {
+        sentListEl.innerHTML = sent.map(renderEmailCard).join('');
+      }
+      
+    } catch(err) {
+      scheduledListEl.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: var(--accent-danger);">Failed to load outbox.</div>';
+      sentListEl.innerHTML = '';
+    }
+  }
+  
+  window.cancelEmail = async (id) => {
+    if (!confirm('Are you sure you want to cancel this scheduled email?')) return;
+    try {
+      await fetch('/api/outbox/' + id, { method: 'DELETE' });
+      initOutboxPage();
+    } catch(err) {
+      alert('Failed to cancel email.');
+    }
+  };
 
   // ===== State =====
   const state = {
@@ -15,29 +165,36 @@
     searchQuery: '',
     filters: { countries: new Set(), categories: new Set(), minPubs: 0, univType: '' },
     sortBy: 'pubs',
+    openAlexMode: false,
+    openAlexResults: [],
     displayCount: 25,
-    // Match page state
-    selectedInterests: new Set(),
-    // Storage State
-    templates: JSON.parse(localStorage.getItem('profscout_templates')) || [
-      { id: '1', name: 'Standard Cold Email', subject: 'Prospective PhD Student - {{my_name}}', body: 'Dear Prof. {{prof_lastName}},\n\nI am a prospective PhD student interested in your work at {{univ_name}}, specifically in {{research_area}}.\n\nI recently read your paper on [insert paper here] and was fascinated by the approach. I would love to discuss potential opportunities in your lab.\n\nBest regards,\n{{my_name}}' }
-    ],
-    activeTemplateId: '1',
-    applications: JSON.parse(localStorage.getItem('profscout_applications')) || {},
-    settings: JSON.parse(localStorage.getItem('profscout_settings')) || {
-      apiKey: '', userName: '', userBackground: ''
-    }
+    templates: [],
+    activeTemplateId: null,
+    applications: {},
+    settings: { llmProvider: 'openai', apiKey: '', userName: '', userBackground: '', smtpEmail: '', smtpPassword: '' }
   };
 
-  // ===== Local Storage =====
-  function saveTemplates() {
-    localStorage.setItem('profscout_templates', JSON.stringify(state.templates));
+  // ===== Backend Storage =====
+  async function saveTemplates() {
+    await fetch('/api/templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state.templates)
+    });
   }
-  function saveApplications() {
-    localStorage.setItem('profscout_applications', JSON.stringify(state.applications));
+  async function saveApplications() {
+    await fetch('/api/applications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state.applications)
+    });
   }
-  function saveSettings() {
-    localStorage.setItem('profscout_settings', JSON.stringify(state.settings));
+  async function saveSettings() {
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state.settings)
+    });
   }
 
   // ===== Data Loader =====
@@ -45,8 +202,8 @@
     const loadingBar = document.getElementById('loading-bar-fill');
     try {
       loadingBar.style.width = '20%';
-      const [profRes, instRes, areaRes] = await Promise.all([
-        fetch('data/professors.json'), fetch('data/institutions.json'), fetch('data/areas.json')
+      const [profRes, instRes, areaRes, stateRes] = await Promise.all([
+        fetch('data/professors.json'), fetch('data/institutions.json'), fetch('data/areas.json'), fetch('/api/state')
       ]);
       loadingBar.style.width = '60%';
       state.professors = await profRes.json();
@@ -54,6 +211,15 @@
       const areaData = await areaRes.json();
       state.areas = areaData.areas || {};
       state.categories = areaData.categories || {};
+      
+      const serverState = await stateRes.json();
+      state.settings = serverState.settings;
+      state.templates = serverState.templates;
+      if (state.templates.length > 0) {
+        state.activeTemplateId = state.templates[0].id;
+      }
+      state.applications = serverState.applications;
+
       loadingBar.style.width = '100%';
       state.loaded = true;
       document.getElementById('stat-professors').textContent = `${state.professors.length.toLocaleString()} Professors`;
@@ -80,6 +246,7 @@
       case 'match': main.innerHTML = renderMatchPage(); initMatchPage(); break;
       case 'templates': main.innerHTML = renderTemplatesPage(); initTemplatesPage(); break;
       case 'tracker': main.innerHTML = renderTrackerPage(); initTrackerPage(); break;
+      case 'outbox': main.innerHTML = renderOutboxPage(); initOutboxPage(); break;
       default: main.innerHTML = renderDiscoverPage(); initDiscoverPage(); break;
     }
   }
@@ -124,19 +291,42 @@
   }
 
   function openSettingsModal() {
+    const provider = state.settings.llmProvider || 'openai';
     const bodyHtml = `
       <div class="form-group">
-        <label class="form-label">OpenAI API Key</label>
-        <input type="password" class="form-input" id="setting-api-key" value="${escapeHtml(state.settings.apiKey)}" placeholder="sk-...">
-        <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Stored locally in your browser.</div>
+        <label class="form-label">LLM Provider</label>
+        <select class="form-input" id="setting-llm-provider">
+          <option value="openai" ${provider === 'openai' ? 'selected' : ''}>OpenAI</option>
+          <option value="gemini" ${provider === 'gemini' ? 'selected' : ''}>Google Gemini</option>
+          <option value="anthropic" ${provider === 'anthropic' ? 'selected' : ''}>Anthropic</option>
+        </select>
+      </div>
+      <div class="form-group" style="position: relative;">
+        <label class="form-label">API Key</label>
+        <div style="display: flex; gap: 0.5rem;">
+          <input type="password" class="form-input" id="setting-api-key" value="${escapeHtml(state.settings.apiKey || '')}" placeholder="Your API Key" style="flex:1;">
+          <button class="btn btn-secondary" id="test-llm-btn" style="white-space: nowrap;">Test API</button>
+        </div>
       </div>
       <div class="form-group">
         <label class="form-label">Your Name</label>
-        <input type="text" class="form-input" id="setting-name" value="${escapeHtml(state.settings.userName)}" placeholder="e.g. Jane Doe">
+        <input type="text" class="form-input" id="setting-name" value="${escapeHtml(state.settings.userName || '')}" placeholder="e.g. Jane Doe">
       </div>
       <div class="form-group">
         <label class="form-label">Your Background & Interests</label>
-        <textarea class="form-textarea" id="setting-background" placeholder="e.g. I am a master's student with 2 years of research experience in computer vision..." style="min-height: 80px">${escapeHtml(state.settings.userBackground)}</textarea>
+        <textarea class="form-textarea" id="setting-background" placeholder="e.g. I am a master's student with 2 years of research experience in computer vision..." style="min-height: 80px">${escapeHtml(state.settings.userBackground || '')}</textarea>
+      </div>
+      <div class="form-group" style="margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+        <label class="form-label">Gmail Address (for sending emails)</label>
+        <input type="email" class="form-input" id="setting-smtp-email" value="${escapeHtml(state.settings.smtpEmail || '')}" placeholder="your.email@gmail.com">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Google App Password</label>
+        <div style="display: flex; gap: 0.5rem;">
+          <input type="password" class="form-input" id="setting-smtp-password" value="${escapeHtml(state.settings.smtpPassword || '')}" placeholder="16-character app password" style="flex:1;">
+          <button class="btn btn-secondary" id="test-smtp-btn" style="white-space: nowrap;">Test SMTP</button>
+        </div>
+        <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Standard Gmail passwords do not work. Generate an App Password in your Google Account settings.</div>
       </div>
     `;
     const footerHtml = `
@@ -146,11 +336,62 @@
     openModal('Settings', bodyHtml, footerHtml);
     document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
     document.getElementById('modal-save-settings-btn').addEventListener('click', () => {
+      state.settings.llmProvider = document.getElementById('setting-llm-provider').value;
       state.settings.apiKey = document.getElementById('setting-api-key').value.trim();
       state.settings.userName = document.getElementById('setting-name').value.trim();
       state.settings.userBackground = document.getElementById('setting-background').value.trim();
+      state.settings.smtpEmail = document.getElementById('setting-smtp-email').value.trim();
+      state.settings.smtpPassword = document.getElementById('setting-smtp-password').value.trim();
       saveSettings();
       closeModal();
+    });
+
+    document.getElementById('test-llm-btn').addEventListener('click', async (e) => {
+      const btn = e.target;
+      const originalText = btn.textContent;
+      btn.textContent = 'Testing...';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/test-llm', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            llmProvider: document.getElementById('setting-llm-provider').value,
+            apiKey: document.getElementById('setting-api-key').value.trim()
+          })
+        });
+        const data = await res.json();
+        if (res.ok) alert('✅ ' + data.message);
+        else alert('❌ ' + (data.detail || 'Test failed'));
+      } catch (err) {
+        alert('❌ Network error testing API key.');
+      }
+      btn.textContent = originalText;
+      btn.disabled = false;
+    });
+
+    document.getElementById('test-smtp-btn').addEventListener('click', async (e) => {
+      const btn = e.target;
+      const originalText = btn.textContent;
+      btn.textContent = 'Testing...';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/test-smtp', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            smtpEmail: document.getElementById('setting-smtp-email').value.trim(),
+            smtpPassword: document.getElementById('setting-smtp-password').value.trim()
+          })
+        });
+        const data = await res.json();
+        if (res.ok) alert('✅ ' + data.message);
+        else alert('❌ ' + (data.detail || 'Test failed'));
+      } catch (err) {
+        alert('❌ Network error testing SMTP login.');
+      }
+      btn.textContent = originalText;
+      btn.disabled = false;
     });
   }
 
@@ -217,11 +458,16 @@
       </div>
       <div class="form-group">
         <label class="form-label">Subject</label>
-        <input type="text" class="form-input" id="email-preview-subject" readonly>
+        <input type="text" class="form-input" id="email-preview-subject">
       </div>
       <div class="form-group">
         <label class="form-label">Body</label>
-        <textarea class="form-textarea" id="email-preview-body" style="min-height: 200px" readonly></textarea>
+        <textarea class="form-textarea" id="email-preview-body" style="min-height: 200px"></textarea>
+      </div>
+      <div class="form-group" style="margin-top: 1rem; border-top: 1px solid var(--border-subtle); padding-top: 1rem;">
+        <label class="form-label">Schedule Send (Optional)</label>
+        <input type="datetime-local" class="form-input" id="email-schedule-time">
+        <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Leave blank to send immediately. (Ensure ProfScout server is running at the scheduled time).</div>
       </div>
     `;
 
@@ -230,7 +476,8 @@
         <button class="btn btn-secondary ai-btn" id="modal-ai-btn">✨ Generate with AI</button>
       </div>
       <button class="btn btn-secondary" id="modal-cancel-btn">Cancel</button>
-      <button class="btn btn-primary" id="modal-send-btn">Open in Email Client</button>
+      <button class="btn btn-primary" id="modal-send-btn">Send Now</button>
+      <button class="btn btn-primary" id="modal-schedule-btn" style="display:none; background:var(--accent-4);">Schedule Send</button>
     `;
 
     openModal(`Email ${profName}`, bodyHtml, footerHtml);
@@ -241,13 +488,83 @@
       updatePreview();
     });
 
-    document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
-    document.getElementById('modal-send-btn').addEventListener('click', () => {
-      const sub = encodeURIComponent(document.getElementById('email-preview-subject').value);
-      const bod = encodeURIComponent(document.getElementById('email-preview-body').value);
-      window.open(`mailto:?subject=${sub}&body=${bod}`);
-      closeModal();
+    const scheduleInput = document.getElementById('email-schedule-time');
+    const sendBtn = document.getElementById('modal-send-btn');
+    const scheduleBtn = document.getElementById('modal-schedule-btn');
+
+    scheduleInput.addEventListener('change', (e) => {
+      if (e.target.value) {
+        sendBtn.style.display = 'none';
+        scheduleBtn.style.display = 'inline-block';
+      } else {
+        sendBtn.style.display = 'inline-block';
+        scheduleBtn.style.display = 'none';
+      }
     });
+
+    document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
+
+    const handleSend = async (isScheduled, btnElement) => {
+      if (!state.settings.smtpEmail || !state.settings.smtpPassword) {
+        alert('Please configure your Gmail Address and App Password in Settings first.');
+        closeModal();
+        openSettingsModal();
+        return;
+      }
+      
+      btnElement.disabled = true;
+      const originalHtml = btnElement.innerHTML;
+      btnElement.innerHTML = '<span class="btn-spinner"></span> ' + (isScheduled ? 'Scheduling...' : 'Sending...');
+      
+      try {
+        const sub = document.getElementById('email-preview-subject').value;
+        const bod = document.getElementById('email-preview-body').value;
+        const fakeEmail = profName.toLowerCase().replace(/[^a-zA-Z0-9]/g, '.') + '@example.edu';
+        
+        let sendAtMs = null;
+        if (isScheduled && scheduleInput.value) {
+          sendAtMs = new Date(scheduleInput.value).getTime();
+          if (sendAtMs <= Date.now()) {
+            throw new Error("Scheduled time must be in the future.");
+          }
+        }
+        
+        const response = await fetch('/api/send-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: fakeEmail,
+            profName: profName,
+            subject: sub,
+            body: bod,
+            sendAt: sendAtMs
+          })
+        });
+        
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.detail || 'Failed to process email request');
+        }
+        
+        alert(isScheduled ? 'Email scheduled successfully!' : 'Email sent successfully via Gmail!');
+        
+        const profId = prof.n + '_' + prof.a;
+        if (!state.applications[profId]) toggleTrackProfessor(prof);
+        state.applications[profId].status = 'contacted';
+        saveApplications();
+        route();
+        closeModal();
+      } catch (err) {
+        console.error(err);
+        alert('Failed: ' + err.message);
+        btnElement.disabled = false;
+        btnElement.innerHTML = originalHtml;
+      }
+    };
+
+    sendBtn.addEventListener('click', (e) => handleSend(false, e.target));
+    scheduleBtn.addEventListener('click', (e) => handleSend(true, e.target));
+
     document.getElementById('modal-ai-btn').addEventListener('click', (e) => {
       const subjectInput = document.getElementById('email-preview-subject');
       const bodyInput = document.getElementById('email-preview-body');
@@ -379,17 +696,23 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
     const countryCounts = getCountryCounts().slice(0, 15);
     const categoryCounts = getCategoryCounts();
     return `
-      <div class="page-header">
-        <h1 class="page-title">Discover Professors</h1>
-        <p class="page-subtitle">Search ${state.professors.length.toLocaleString()} CS faculty across ${Object.keys(state.institutions).length.toLocaleString()} institutions worldwide</p>
+      <div class="page-header" style="display:flex; justify-content:space-between; align-items:flex-end; flex-wrap:wrap; gap:1rem;">
+        <div>
+          <h1 class="page-title">Discover Professors</h1>
+          <p class="page-subtitle">${state.openAlexMode ? 'Search millions of faculty across all STEM fields via OpenAlex' : `Search ${state.professors.length.toLocaleString()} CS faculty across ${Object.keys(state.institutions).length.toLocaleString()} institutions worldwide`}</p>
+        </div>
+        <div style="display:flex; gap:0.25rem; background: var(--bg-alt); padding: 4px; border-radius: 6px; border: 1px solid var(--border);">
+          <button class="btn ${!state.openAlexMode ? 'btn-primary' : 'btn-secondary'}" id="mode-cs-btn" style="padding: 6px 12px; font-size:0.85rem; border:none; box-shadow:none;">CS Rankings</button>
+          <button class="btn ${state.openAlexMode ? 'btn-primary' : 'btn-secondary'}" id="mode-oa-btn" style="padding: 6px 12px; font-size:0.85rem; border:none; box-shadow:none;" title="Search all STEM fields via OpenAlex">Global STEM</button>
+        </div>
       </div>
       <div class="search-container">
         <span class="search-icon">&#128270;</span>
-        <input type="text" class="search-input" id="search-input" placeholder="Search by professor name or university..." value="${escapeHtml(state.searchQuery)}" autocomplete="off">
+        <input type="text" class="search-input" id="search-input" placeholder="${state.openAlexMode ? 'Search by name or institution (e.g. Mechanical Engineering MIT)...' : 'Search by professor name or university...'}" value="${escapeHtml(state.searchQuery)}" autocomplete="off">
         <span class="search-count" id="search-count"></span>
       </div>
-      <div class="discover-layout">
-        <aside class="filter-panel" id="filter-panel">
+      <div class="discover-layout" ${state.openAlexMode ? 'style="grid-template-columns: 1fr;"' : ''}>
+        <aside class="filter-panel" id="filter-panel" ${state.openAlexMode ? 'style="display:none;"' : ''}>
           <div class="filter-section">
             <div class="filter-title" data-target="cat-options">Research Area</div>
             <div class="filter-options" id="cat-options">
@@ -415,7 +738,7 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
           </div>
         </aside>
         <section id="results-section">
-          <div class="results-header">
+          <div class="results-header" ${state.openAlexMode ? 'style="display:none;"' : ''}>
             <div class="results-count" id="results-count"></div>
             <select class="sort-select" id="sort-select">
               <option value="pubs" ${state.sortBy === 'pubs' ? 'selected' : ''}>Sort: Most Publications</option>
@@ -466,16 +789,46 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
     }).join('');
   }
 
-  function updateDiscoverResults() {
+  async function updateDiscoverResults() {
     if(state.currentPage !== 'discover') return;
-    const filtered = getFilteredProfessors();
+    
     const listEl = document.getElementById('professor-list');
-    if (listEl) listEl.innerHTML = renderProfCards(filtered, state.displayCount);
     const countEl = document.getElementById('results-count');
-    if (countEl) countEl.innerHTML = `Showing <strong>${Math.min(state.displayCount, filtered.length)}</strong> of <strong>${filtered.length.toLocaleString()}</strong> professors`;
     const searchCountEl = document.getElementById('search-count');
-    if (searchCountEl) searchCountEl.textContent = `${filtered.length.toLocaleString()} results`;
     const loadMoreBtn = document.getElementById('load-more-btn');
+
+    if (state.openAlexMode) {
+      if (!state.searchQuery.trim()) {
+        if (listEl) listEl.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-muted);">Type a name or institution to search across all STEM fields.</div>';
+        if (countEl) countEl.innerHTML = '';
+        if (searchCountEl) searchCountEl.textContent = '0 results';
+        if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+        return;
+      }
+      
+      if (listEl) listEl.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-muted);">Searching OpenAlex...</div>';
+      
+      try {
+        const res = await fetch('/api/openalex/search?q=' + encodeURIComponent(state.searchQuery));
+        if (res.ok) {
+          const data = await res.json();
+          state.openAlexResults = data.results || [];
+          if (listEl) listEl.innerHTML = renderProfCards(state.openAlexResults, state.displayCount);
+          if (countEl) countEl.innerHTML = `Showing top <strong>${state.openAlexResults.length}</strong> results from OpenAlex`;
+          if (searchCountEl) searchCountEl.textContent = `${state.openAlexResults.length} results`;
+          if (loadMoreBtn) loadMoreBtn.style.display = 'none'; // OpenAlex just returns top 25
+          initDiscoverListEvents();
+        }
+      } catch (e) {
+        if (listEl) listEl.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--accent-danger);">Failed to search OpenAlex.</div>';
+      }
+      return;
+    }
+
+    const filtered = getFilteredProfessors();
+    if (listEl) listEl.innerHTML = renderProfCards(filtered, state.displayCount);
+    if (countEl) countEl.innerHTML = `Showing <strong>${Math.min(state.displayCount, filtered.length)}</strong> of <strong>${filtered.length.toLocaleString()}</strong> professors`;
+    if (searchCountEl) searchCountEl.textContent = `${filtered.length.toLocaleString()} results`;
     if (loadMoreBtn) loadMoreBtn.style.display = state.displayCount < filtered.length ? 'block' : 'none';
 
     initDiscoverListEvents();
@@ -500,11 +853,21 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
 
   function initDiscoverPage() {
     state.displayCount = 25;
+    
+    document.getElementById('mode-cs-btn')?.addEventListener('click', () => {
+      state.openAlexMode = false;
+      route();
+    });
+    document.getElementById('mode-oa-btn')?.addEventListener('click', () => {
+      state.openAlexMode = true;
+      route();
+    });
+
     const searchInput = document.getElementById('search-input');
     let searchTimeout;
     searchInput.addEventListener('input', (e) => {
       clearTimeout(searchTimeout);
-      searchTimeout = setTimeout(() => { state.searchQuery = e.target.value; state.displayCount = 25; updateDiscoverResults(); }, 200);
+      searchTimeout = setTimeout(() => { state.searchQuery = e.target.value; state.displayCount = 25; updateDiscoverResults(); }, state.openAlexMode ? 600 : 200);
     });
     document.getElementById('filter-panel').addEventListener('change', (e) => {
       const el = e.target;
@@ -590,7 +953,7 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
     return `
       <div class="page-header"><h1 class="page-title">Find Your Research Match</h1></div>
       <div class="interest-selector" id="interest-selector">
-        ${catEntries.map(([cat, codes]) => `<div class="interest-category"><div class="interest-category-title">${cat}</div><div class="interest-tags">${codes.map(c => '').join('')}<div class="interest-tag ${state.selectedInterests.has(cat)?'selected':''}" data-category="${cat}">${cat}</div></div></div>`).join('')}
+        ${catEntries.map(([cat, codes]) => `<div class="interest-category"><div class="interest-category-title">${cat}</div><div class="interest-tags">${codes.map(c => `<div class="interest-tag ${state.selectedInterests.has(cat)?'selected':''}" data-category="${cat}">${getAreaLabel(c)}</div>`).join('')}</div></div>`).join('')}
         <div class="match-controls"><button class="match-btn" id="match-btn" ${state.selectedInterests.size===0?'disabled':''}>Find Matches</button></div>
       </div>
       <div id="match-results"></div>
@@ -749,20 +1112,29 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
     });
 
     return `
-      <div class="page-header"><h1 class="page-title">Application Tracker</h1></div>
+      <div class="page-header" style="display:flex; justify-content:space-between; align-items:center;">
+        <h1 class="page-title">Application Tracker</h1>
+        <button class="btn btn-primary" id="bulk-schedule-btn" style="background:var(--accent-2);">🗓️ Bulk Schedule Selected</button>
+      </div>
       <div class="kanban-board">
         ${KANBAN_COLS.map(col => `
           <div class="kanban-column" data-status="${col}">
             <div class="kanban-column-header">
+              <input type="checkbox" class="kanban-select-all" data-status="${col}" title="Select All" style="margin-right: 6px; transform: scale(1.1); cursor:pointer;">
               <span>${COL_NAMES[col]}</span>
               <span class="kanban-count">${appsByCol[col].length}</span>
             </div>
             <div class="kanban-cards" ondragover="event.preventDefault()" data-status="${col}">
               ${appsByCol[col].map(app => `
                 <div class="kanban-card" draggable="true" data-id="${app.id}">
-                  <div class="kanban-card-title">${escapeHtml(app.prof.n)}</div>
-                  <div class="kanban-card-subtitle">${escapeHtml(app.prof.a)}</div>
-                  <div class="kanban-card-actions">
+                  <div style="display:flex; align-items:flex-start;">
+                    <input type="checkbox" class="bulk-select-cb" value="${app.id}" style="margin-right:6px; margin-top:4px; transform:scale(1.2); cursor:pointer;">
+                    <div>
+                      <div class="kanban-card-title">${escapeHtml(app.prof.n)}</div>
+                      <div class="kanban-card-subtitle">${escapeHtml(app.prof.a)}</div>
+                    </div>
+                  </div>
+                  <div class="kanban-card-actions" style="margin-top:0.5rem;">
                     <select class="status-select" data-id="${app.id}">
                       ${KANBAN_COLS.map(c => `<option value="${c}" ${app.status===c?'selected':''}>${COL_NAMES[c]}</option>`).join('')}
                     </select>
@@ -790,19 +1162,153 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
     document.querySelectorAll('.kanban-card').forEach(card => {
       card.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', card.dataset.id); });
     });
-    document.querySelectorAll('.kanban-cards').forEach(col => {
-      col.addEventListener('drop', e => {
+    document.querySelectorAll('.kanban-cards').forEach(zone => {
+      zone.addEventListener('drop', e => {
         e.preventDefault();
         const id = e.dataTransfer.getData('text/plain');
-        if (id && state.applications[id]) {
-          state.applications[id].status = col.dataset.status;
+        const newStatus = zone.dataset.status;
+        if (state.applications[id] && state.applications[id].status !== newStatus) {
+          state.applications[id].status = newStatus;
           saveApplications();
           route();
         }
       });
     });
+
+    document.querySelectorAll('.kanban-select-all').forEach(cb => {
+      cb.addEventListener('change', (e) => {
+        const isChecked = e.target.checked;
+        const colStatus = e.target.dataset.status;
+        const column = document.querySelector(`.kanban-cards[data-status="${colStatus}"]`);
+        if (column) {
+          column.querySelectorAll('.bulk-select-cb').forEach(cardCb => {
+            cardCb.checked = isChecked;
+          });
+        }
+      });
+    });
+    
+    document.getElementById('bulk-schedule-btn').addEventListener('click', () => {
+      const selectedIds = Array.from(document.querySelectorAll('.bulk-select-cb:checked')).map(cb => cb.value);
+      if (selectedIds.length === 0) {
+        alert("Please select at least one professor to bulk schedule emails.");
+        return;
+      }
+      openBulkScheduleModal(selectedIds);
+    });
+
     document.querySelectorAll('.email-btn').forEach(btn => {
       btn.addEventListener('click', (e) => openEmailModal(JSON.parse(e.target.dataset.prof)));
+    });
+  }
+
+  function openBulkScheduleModal(selectedIds) {
+    if (state.templates.length === 0) {
+      alert("You need to create an Email Template first!");
+      route('/templates');
+      return;
+    }
+    
+    const templateOptions = state.templates.map(t =>
+      `<option value="${t.id}">${escapeHtml(t.name)}</option>`
+    ).join('');
+    
+    const bodyHtml = `
+      <div style="margin-bottom:1rem;">You are about to schedule emails for <strong>${selectedIds.length}</strong> professor(s).</div>
+      <div class="form-group">
+        <label class="form-label">Select Template</label>
+        <select class="form-input" id="bulk-template-select">
+          ${templateOptions}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Schedule Date & Time</label>
+        <input type="datetime-local" class="form-input" id="bulk-schedule-time">
+      </div>
+    `;
+    
+    const footerHtml = `
+      <button class="btn btn-secondary" id="modal-cancel-bulk-btn">Cancel</button>
+      <button class="btn btn-primary" id="modal-confirm-bulk-btn" style="background:var(--accent-4);">Confirm Bulk Schedule</button>
+    `;
+    
+    openModal('Bulk Schedule Emails', bodyHtml, footerHtml);
+    
+    document.getElementById('modal-cancel-bulk-btn').addEventListener('click', closeModal);
+    document.getElementById('modal-confirm-bulk-btn').addEventListener('click', async (e) => {
+      const scheduleVal = document.getElementById('bulk-schedule-time').value;
+      if (!scheduleVal) {
+        alert("Please select a date and time for bulk scheduling.");
+        return;
+      }
+      
+      const sendAtMs = new Date(scheduleVal).getTime();
+      if (sendAtMs <= Date.now()) {
+        alert("Scheduled time must be in the future.");
+        return;
+      }
+      
+      const templateId = document.getElementById('bulk-template-select').value;
+      const template = state.templates.find(t => t.id === templateId);
+      
+      const btn = e.target;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="btn-spinner"></span> Scheduling...';
+      
+      let successCount = 0;
+      
+      for (const appId of selectedIds) {
+        const app = state.applications[appId];
+        if (!app) continue;
+        const prof = app.prof;
+        const profAreasStr = prof.ar.slice(0,2).map(getAreaLabel).join(' and ');
+        
+        let subject = template.subject;
+        let body = template.body;
+        const context = {
+          my_name: state.settings.userName || '[Your Name]',
+          my_background: state.settings.userBackground || '[Your Background]',
+          prof_lastName: prof.n.split(' ').pop(),
+          prof_fullName: prof.n,
+          univ_name: prof.a,
+          research_area: profAreasStr
+        };
+        for (const [key, val] of Object.entries(context)) {
+          const regex = new RegExp(`{{${key}}}`, 'g');
+          subject = subject.replace(regex, val);
+          body = body.replace(regex, val);
+        }
+        
+        const fakeEmail = prof.n.toLowerCase().replace(/[^a-zA-Z0-9]/g, '.') + '@example.edu';
+        
+        try {
+          const response = await fetch('/api/send-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: fakeEmail,
+              profName: prof.n,
+              subject: subject,
+              body: body,
+              sendAt: sendAtMs
+            })
+          });
+          if (response.ok) successCount++;
+        } catch(err) {
+          console.error("Failed to bulk schedule for " + prof.n, err);
+        }
+      }
+      
+      alert(`Successfully scheduled ${successCount} out of ${selectedIds.length} emails! They will appear in your Mail tab and Gmail Drafts.`);
+      
+      for (const appId of selectedIds) {
+        if (state.applications[appId]) {
+          state.applications[appId].status = 'contacted';
+        }
+      }
+      saveApplications();
+      route();
+      closeModal();
     });
   }
 

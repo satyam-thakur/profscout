@@ -6,26 +6,29 @@ This document tracks the current progress, future roadmap, and recommended impro
 
 | Page | Description |
 |------|-------------|
-| **Discover** | Search & filter 34,000+ professors by name, university, research area, country, and publication count |
+| **Discover** | Search & filter 34,000+ CS faculty locally, or search millions of global STEM faculty live via OpenAlex |
 | **Stipends** | Visual dashboard comparing 82 US university PhD stipends vs. cost of living with sortable tables and bar charts |
 | **Match** | Select your research interests and get ranked professor recommendations with match scores |
+| **Tracker** | Kanban board to track your PhD applications (Saved, Contacted, Interviewing, Accepted, Rejected) |
+| **Mail** | Generate AI-personalized emails, schedule delivery via SMTP, and sync sent/scheduled status via IMAP Gmail integration |
 
 ## Roadmap
 
 - [x] **v0.1** — Professor Discovery (search, filter, sort)
 - [x] **v0.2** — Stipend Dashboard (charts, tables, comparisons)
 - [x] **v0.3** — Research Interest Matcher (scoring algorithm)
-- [ ] **v0.4** — Email Template Engine (merge fields, personalization)
-- [ ] **v0.5** — Application Tracker (kanban board, status tracking)
-- [ ] **v1.0** — AI Email Generation (OpenAI integration)
-- [ ] **v1.1** — Gmail/SMTP email sending via API
-- [ ] **v1.2** — GitHub Actions for automated data updates
+- [x] **v0.4** — Email Template Engine (merge fields, personalization)
+- [x] **v0.5** — Application Tracker (kanban board, status tracking)
+- [x] **v1.0** — AI Email Generation (OpenAI integration)
+- [x] **v1.1** — Gmail/SMTP email sending & IMAP Sync
+- [x] **v1.2** — Global STEM Support (OpenAlex integration)
+- [ ] **v1.3** — GitHub Actions for automated data updates
 
 ## Recommendations & Future Improvements
 
 1. **Broaden to all STEM Fields**
-   - **Current:** CS-only (via CSrankings).
-   - **Improvement:** Integrate with OpenAlex API or the Stanford/Elsevier Top Scientists dataset to include civil engineering, mechanical engineering, physics, and other STEM fields.
+   - **Current:** Completed via OpenAlex API integration for live global STEM search.
+   - **Future:** Allow filtering OpenAlex results by country and specific STEM sub-domains (e.g. Mechanical Engineering).
 
 2. **Advanced Filtering & Metrics**
    - Incorporate h-index or citation metrics.
