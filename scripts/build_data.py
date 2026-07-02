@@ -120,13 +120,18 @@ CATEGORY_ORDER = [
 def find_project_root():
     """Find the data root directory.
     
-    Looks for git submodules in profscout/data/ first,
+    Looks for git submodules in profscout/ first, then profscout/data/,
     falls back to parent mail_automation/ directory.
     """
     script_dir = Path(__file__).resolve().parent
     profscout_dir = script_dir.parent
     
-    # Prefer submodules inside profscout/data/
+    # Prefer submodules inside profscout/
+    if (profscout_dir / "CSrankings" / "csrankings.csv").exists():
+        print(f"  Using submodule data from: {profscout_dir}")
+        return profscout_dir
+
+    # Also check profscout/data/
     submodule_root = profscout_dir / "data"
     if (submodule_root / "CSrankings" / "csrankings.csv").exists():
         print(f"  Using submodule data from: {submodule_root}")
