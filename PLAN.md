@@ -22,7 +22,7 @@ This document tracks the current progress, future roadmap, and recommended impro
 - [x] **v1.0** — AI Email Generation (OpenAI integration)
 - [x] **v1.1** — Gmail/SMTP email sending & IMAP Sync
 - [x] **v1.2** — Global STEM Support (OpenAlex integration)
-- [ ] **v1.3** — GitHub Actions for automated data updates
+- [x] **v1.3** — GitHub Actions for automated data updates
 
 ## Recommendations & Future Improvements
 

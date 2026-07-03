@@ -525,20 +525,22 @@ def search_openalex(q: str):
                 name = author.get('display_name', '')
                 inst = author.get('last_known_institution')
                 inst_name = inst.get('display_name') if inst else "Unknown Institution"
+                country_code = inst.get('country_code', 'US') if inst else 'US'
                 
-                # Top concepts
+                # Top concepts as list of strings
                 concepts = author.get('x_concepts', [])
-                areas_dict = {}
-                for c in concepts[:3]:
-                    areas_dict[c['display_name']] = int(c['score'] * 100)
+                areas_list = []
+                for c in concepts[:6]:
+                    areas_list.append(c['display_name'])
                 
                 prof_obj = {
                     "n": name,
                     "a": inst_name,
                     "h": author.get('id', ''), # use OpenAlex ID as homepage link to their profile
-                    "p": author.get('works_count', 0),
-                    "c": author.get('cited_by_count', 0),
-                    "ar": areas_dict
+                    "c": country_code,
+                    "tp": author.get('works_count', 0),
+                    "rp": author.get('cited_by_count', 0),
+                    "ar": areas_list
                 }
                 results.append(prof_obj)
             return {"results": results}

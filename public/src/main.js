@@ -519,7 +519,7 @@
       try {
         const sub = document.getElementById('email-preview-subject').value;
         const bod = document.getElementById('email-preview-body').value;
-        const fakeEmail = profName.toLowerCase().replace(/[^a-zA-Z0-9]/g, '.') + '@example.edu';
+        const fakeEmail = profName.toLowerCase().replace(/[^a-zA-Z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') + '@example.edu';
         
         let sendAtMs = null;
         if (isScheduled && scheduleInput.value) {
@@ -774,8 +774,8 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
           </div>
           <div class="prof-areas">${areas}${moreAreas}</div>
           <div class="prof-stats">
-            <span class="prof-stat"><strong>${Math.round(p.tp)}</strong> total pubs</span>
-            <span class="prof-stat"><strong>${Math.round(p.rp)}</strong> since 2020</span>
+            <span class="prof-stat"><strong>${Math.round(p.tp || 0)}</strong> total pubs</span>
+            <span class="prof-stat"><strong>${Math.round(p.rp || 0)}</strong> ${state.openAlexMode ? 'citations' : 'since 2020'}</span>
           </div>
           <div class="prof-links">${homepageUrl}${scholarUrl}${stipendLink}</div>
           <div class="prof-actions">
@@ -1279,7 +1279,7 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
           body = body.replace(regex, val);
         }
         
-        const fakeEmail = prof.n.toLowerCase().replace(/[^a-zA-Z0-9]/g, '.') + '@example.edu';
+        const fakeEmail = prof.n.toLowerCase().replace(/[^a-zA-Z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') + '@example.edu';
         
         try {
           const response = await fetch('/api/send-email', {

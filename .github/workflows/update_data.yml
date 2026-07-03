@@ -1,0 +1,48 @@
+name: Automated Data Update
+
+on:
+  schedule:
+    # Run at 00:00 every Sunday
+    - cron: '0 0 * * 0'
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0 # Need full history to push back
+
+      - name: Update submodules
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git submodule update --remote --merge
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build data
+        run: |
+          python scripts/build_data.py
+
+      - name: Check for changes and commit
+        run: |
+          # Add submodule updates and regenerated JSON files
+          git add data/CSrankings
+          git add data/CSStipendRankings
+          git add public/data/*.json
+          
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: auto-update CSrankings data and rebuild JSON"
+            git push origin dev
+          fi
