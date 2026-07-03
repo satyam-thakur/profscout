@@ -47,6 +47,19 @@
 
   // ===== Mail Page =====
   function renderOutboxPage() {
+    if (state.isStatic) {
+      return `
+        <div style="text-align:center; padding:4rem; max-width:600px; margin:0 auto;">
+          <h2 style="color:var(--text-primary); margin-bottom:1rem;">Desktop App Required</h2>
+          <p style="color:var(--text-secondary); line-height:1.6; margin-bottom:2rem;">
+            Sending and scheduling AI-generated emails requires the local Python backend to communicate with SMTP servers and sync with your Gmail IMAP. This feature is not available in the static web preview.
+          </p>
+          <a href="https://github.com/satyam-thakur/mail_automation" target="_blank" class="action-btn" style="text-decoration:none; display:inline-block; font-size:1.1rem; padding:0.75rem 1.5rem;">
+            Download Desktop Version
+          </a>
+        </div>
+      `;
+    }
     return `
       <div class="page-header" style="display:flex; justify-content:space-between; align-items:center;">
         <div>
@@ -203,7 +216,7 @@
     try {
       loadingBar.style.width = '20%';
       const [profRes, instRes, areaRes, stateRes] = await Promise.all([
-        fetch('data/professors.json'), fetch('data/institutions.json'), fetch('data/areas.json'), fetch('/api/state')
+        fetch('data/professors.json'), fetch('data/institutions.json'), fetch('data/areas.json'), fetch('/api/state').catch(() => null)
       ]);
       loadingBar.style.width = '60%';
       state.professors = await profRes.json();
@@ -212,13 +225,22 @@
       state.areas = areaData.areas || {};
       state.categories = areaData.categories || {};
       
-      const serverState = await stateRes.json();
-      state.settings = serverState.settings;
-      state.templates = serverState.templates;
-      if (state.templates.length > 0) {
-        state.activeTemplateId = state.templates[0].id;
+      try {
+        if (!stateRes || !stateRes.ok) throw new Error("Backend not available");
+        const serverState = await stateRes.json();
+        state.settings = serverState.settings;
+        state.templates = serverState.templates;
+        if (state.templates.length > 0) {
+          state.activeTemplateId = state.templates[0].id;
+        }
+        state.applications = serverState.applications;
+      } catch (e) {
+        // Fallback for static hosting (GitHub Pages / Netlify)
+        state.isStatic = true;
+        state.settings = { provider: 'openai', openaiKey: '', anthropicKey: '', geminiKey: '', senderName: '', senderEmail: '', smtpHost: 'smtp.gmail.com', smtpPort: 587, smtpUser: '', smtpPass: '', imapHost: 'imap.gmail.com', imapPort: 993, smtpProtocol: 'tls' };
+        state.templates = [];
+        state.applications = {};
       }
-      state.applications = serverState.applications;
 
       loadingBar.style.width = '100%';
       state.loaded = true;
@@ -779,8 +801,8 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
           </div>
           <div class="prof-links">${homepageUrl}${scholarUrl}${stipendLink}</div>
           <div class="prof-actions">
-            <button class="action-btn email-btn" data-prof='${JSON.stringify(p).replace(/'/g, "&apos;")}'>&#9993; Email</button>
-            <button class="action-btn track-btn ${isTracked ? 'tracked' : ''}" data-prof='${JSON.stringify(p).replace(/'/g, "&apos;")}'>
+            <button class="action-btn email-btn" ${state.isStatic ? 'onclick="alert(\'This feature requires the desktop app. Please download ProfScout locally.\')"' : `data-prof='${JSON.stringify(p).replace(/'/g, "&apos;")}'`}>&#9993; Email</button>
+            <button class="action-btn track-btn ${isTracked ? 'tracked' : ''}" ${state.isStatic ? 'onclick="alert(\'This feature requires the desktop app. Please download ProfScout locally.\')"' : `data-prof='${JSON.stringify(p).replace(/'/g, "&apos;")}'`}>
               ${isTracked ? '&#10003; Tracked' : '&#128161; Track'}
             </button>
           </div>
@@ -809,10 +831,24 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
       if (listEl) listEl.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-muted);">Searching OpenAlex...</div>';
       
       try {
-        const res = await fetch('/api/openalex/search?q=' + encodeURIComponent(state.searchQuery));
+        const url = 'https://api.openalex.org/authors?search=' + encodeURIComponent(state.searchQuery) + '&sort=cited_by_count:desc&per-page=25';
+        const res = await fetch(url, { headers: { 'User-Agent': 'mailto:profscout@example.com' } });
         if (res.ok) {
           const data = await res.json();
-          state.openAlexResults = data.results || [];
+          // Map OpenAlex response directly in the client
+          state.openAlexResults = (data.results || []).map(author => {
+            const inst = author.last_known_institution;
+            const areas = author.x_concepts ? author.x_concepts.slice(0, 6).map(c => c.display_name) : [];
+            return {
+              n: author.display_name || '',
+              a: inst ? inst.display_name : 'Unknown Institution',
+              h: author.id || '',
+              c: inst ? (inst.country_code || 'US') : 'US',
+              tp: author.works_count || 0,
+              rp: author.cited_by_count || 0,
+              ar: areas
+            };
+          });
           if (listEl) listEl.innerHTML = renderProfCards(state.openAlexResults, state.displayCount);
           if (countEl) countEl.innerHTML = `Showing top <strong>${state.openAlexResults.length}</strong> results from OpenAlex`;
           if (searchCountEl) searchCountEl.textContent = `${state.openAlexResults.length} results`;
@@ -1104,6 +1140,19 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
   const COL_NAMES = { saved: 'Saved', contacted: 'Contacted', interviewing: 'Interviewing', accepted: 'Accepted', rejected: 'Rejected' };
 
   function renderTrackerPage() {
+    if (state.isStatic) {
+      return `
+        <div style="text-align:center; padding:4rem; max-width:600px; margin:0 auto;">
+          <h2 style="color:var(--text-primary); margin-bottom:1rem;">Desktop App Required</h2>
+          <p style="color:var(--text-secondary); line-height:1.6; margin-bottom:2rem;">
+            The Application Tracker saves your data to a secure, local SQLite database on your machine to ensure privacy and cross-session persistence. This feature is not available in the static web preview.
+          </p>
+          <a href="https://github.com/satyam-thakur/mail_automation" target="_blank" class="action-btn" style="text-decoration:none; display:inline-block; font-size:1.1rem; padding:0.75rem 1.5rem;">
+            Download Desktop Version
+          </a>
+        </div>
+      `;
+    }
     const appsByCol = {};
     KANBAN_COLS.forEach(c => appsByCol[c] = []);
     Object.values(state.applications).forEach(app => {
