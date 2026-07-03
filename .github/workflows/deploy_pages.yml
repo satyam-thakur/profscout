@@ -35,6 +35,9 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
         
+      - name: Prepare build directory
+        run: cp -r data public/data
+        
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
