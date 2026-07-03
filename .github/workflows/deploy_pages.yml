@@ -31,12 +31,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Generate JSON Data
+        run: python scripts/build_data.py
         
       - name: Setup Pages
         uses: actions/configure-pages@v5
-        
-      - name: Prepare build directory
-        run: cp -r data public/data
         
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
