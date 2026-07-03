@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="src/style.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
   <div id="app">
@@ -40,6 +41,9 @@
           </a>
           <button id="theme-toggle" class="btn" style="background:transparent; border:none; box-shadow:none; font-size:1.4rem; padding:0 8px; cursor:pointer;" title="Toggle Theme">🌓</button>
         </nav>
+        <div class="header-auth" style="margin-left:auto; margin-right: 1rem;">
+          <button id="google-signin-btn" class="btn btn-secondary" style="display:flex; align-items:center; gap:0.5rem; padding: 6px 12px; font-size: 0.9rem; background: var(--bg-surface);">🔑 Sign in with Google</button>
+        </div>
         <div class="header-stats" id="header-stats">
           <span class="stat-badge" id="stat-professors">Loading...</span>
         </div>

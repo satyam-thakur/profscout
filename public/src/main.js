@@ -45,133 +45,408 @@
     }
   });
 
-  // ===== Mail Page =====
-  function renderOutboxPage() {
-    if (state.isStatic) {
-      return `
-        <div style="text-align:center; padding:4rem; max-width:600px; margin:0 auto;">
-          <h2 style="color:var(--text-primary); margin-bottom:1rem;">Desktop App Required</h2>
-          <p style="color:var(--text-secondary); line-height:1.6; margin-bottom:2rem;">
-            Sending and scheduling AI-generated emails requires the local Python backend to communicate with SMTP servers and sync with your Gmail IMAP. This feature is not available in the static web preview.
-          </p>
-          <a href="https://github.com/satyam-thakur/mail_automation" target="_blank" class="action-btn" style="text-decoration:none; display:inline-block; font-size:1.1rem; padding:0.75rem 1.5rem;">
-            Download Desktop Version
-          </a>
+  // Get Client ID from settings or use the one from .env
+  const getClientId = () => state.settings.googleClientId || '843814437429-a2kb6qn2ros3i97mqjk64dab9rv5vnvv.apps.googleusercontent.com';
+
+  // ===== Google Auth =====
+  const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/drive.appdata';
+
+  const GoogleAuth = {
+    tokenClient: null,
+    init() {
+      if (typeof google === 'undefined' || !google.accounts) return;
+      this.tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: getClientId(),
+        scope: GOOGLE_SCOPES,
+        callback: (resp) => {
+          if (resp.error) { console.error('OAuth error:', resp); return; }
+          state.googleToken = resp.access_token;
+          // Fetch user info
+          fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: { Authorization: 'Bearer ' + resp.access_token }
+          }).then(r => r.json()).then(u => {
+            state.googleUser = u;
+            updateAuthUI();
+            CloudBackup.loadFromCloud();
+          });
+        }
+      });
+    },
+    async requestToken() {
+      return new Promise((resolve, reject) => {
+        if (state.googleToken) { resolve(state.googleToken); return; }
+        if (!this.tokenClient) { 
+          if (typeof google !== 'undefined' && google.accounts) {
+            this.init(); // Try init again just in case
+          }
+          if (!this.tokenClient) {
+            alert('Google Sign-In is not available. Please check your internet connection or disable any ad-blockers (like uBlock or Brave Shields) that might block Google scripts.');
+            reject(new Error('Google Sign-In unavailable')); 
+            return; 
+          }
+        }
+        const origCallback = this.tokenClient.callback;
+        this.tokenClient.callback = (resp) => {
+          if (resp.error) { reject(new Error(resp.error)); return; }
+          state.googleToken = resp.access_token;
+          fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: { Authorization: 'Bearer ' + resp.access_token }
+          }).then(r => r.json()).then(u => {
+            state.googleUser = u;
+            StorageManager.save('auth', { token: resp.access_token, user: u, expiresAt: Date.now() + 3500 * 1000 });
+            updateAuthUI();
+            CloudBackup.loadFromCloud();
+          });
+          resolve(resp.access_token);
+        };
+        this.tokenClient.requestAccessToken();
+      });
+    },
+    signOut() {
+      if (state.googleToken) {
+        google.accounts.oauth2.revoke(state.googleToken, () => {});
+      }
+      state.googleToken = null;
+      state.googleUser = null;
+      StorageManager.remove('auth');
+      updateAuthUI();
+    }
+  };
+
+  function updateAuthUI() {
+    const btn = document.getElementById('google-signin-btn');
+    if (!btn) return;
+    if (state.googleUser) {
+      btn.innerHTML = `
+        <div style="display:flex; align-items:center; gap: 8px; text-align:left;">
+          <img src="${state.googleUser.picture || ''}" style="width:28px;height:28px;border-radius:50%; border:1px solid var(--border); object-fit:cover;" alt="User">
+          <div style="display:flex; flex-direction:column; justify-content:center; line-height:1.2;">
+            <span style="font-weight:600; font-size:0.85rem; color:var(--text);">${state.googleUser.given_name || 'Signed In'}</span>
+            <span style="font-size:0.7rem; color:var(--text-muted);">Sign out</span>
+          </div>
         </div>
       `;
+      btn.title = `Click to Sign out of ${state.googleUser.email}`;
+      btn.style.padding = "4px 12px 4px 4px";
+      btn.style.borderRadius = "20px";
+      btn.style.border = "1px solid var(--border)";
+      btn.style.background = "var(--bg-surface)";
+    } else {
+      btn.innerHTML = '🔑 Sign in with Google';
+      btn.title = 'Sign in to send emails and backup data';
+      btn.style.padding = "6px 12px";
+      btn.style.borderRadius = "8px";
     }
+  }
+
+  // ===== Gmail Service =====
+  const GmailService = {
+    async send(to, subject, body) {
+      const token = await GoogleAuth.requestToken();
+      const email = [
+        `To: ${to}`,
+        `Subject: ${subject}`,
+        'Content-Type: text/plain; charset=UTF-8',
+        'MIME-Version: 1.0',
+        '',
+        body
+      ].join('\r\n');
+      
+      const encoded = btoa(unescape(encodeURIComponent(email))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      
+      const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw: encoded })
+      });
+      
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error?.message || 'Gmail API error');
+      }
+      return await res.json();
+    },
+    async createDraft(to, subject, body) {
+      const token = await GoogleAuth.requestToken();
+      const email = [`To: ${to}`, `Subject: ${subject}`, 'Content-Type: text/plain; charset=UTF-8', 'MIME-Version: 1.0', '', body].join('\r\n');
+      const encoded = btoa(unescape(encodeURIComponent(email))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      
+      const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: { raw: encoded } })
+      });
+      if (!res.ok) throw new Error('Failed to create draft');
+      return await res.json();
+    }
+  };
+
+  // ===== AI Service =====
+  const AIService = {
+    async call(prompt, systemInstruction) {
+      const provider = state.settings.llmProvider || 'gemini';
+      const apiKey = state.settings.apiKey;
+      if (!apiKey) throw new Error(`Please enter your ${provider.toUpperCase()} API Key in Settings.`);
+      
+      if (provider === 'openai') {
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              ...(systemInstruction ? [{ role: 'system', content: systemInstruction }] : []),
+              { role: 'user', content: prompt }
+            ]
+          })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error?.message || 'OpenAI API error');
+        }
+        const data = await res.json();
+        return data.choices?.[0]?.message?.content || '';
+      } else if (provider === 'anthropic') {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerously-allow-browser': 'true'
+          },
+          body: JSON.stringify({
+            model: 'claude-3-haiku-20240307',
+            max_tokens: 1024,
+            system: systemInstruction || '',
+            messages: [{ role: 'user', content: prompt }]
+          })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error?.message || 'Anthropic API error');
+        }
+        const data = await res.json();
+        return data.content?.[0]?.text || '';
+      } else {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
+            generationConfig: { responseMimeType: 'application/json' }
+          })
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error?.message || 'Gemini API error');
+        }
+        const data = await res.json();
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      }
+    },
+    async polish(emailBody, action) {
+      const instructions = {
+        enhance: 'You are an expert academic advisor. Rewrite this cold email to a professor to be more professional, specific, and compelling. Output only the improved email body text.',
+        shorten: 'Shorten this email to be more concise while keeping all key points. Output only the shortened email body text.',
+        expand: 'Expand this email with more detail and specificity while maintaining a professional tone. Output only the expanded email body text.',
+        grammar: 'Fix all grammatical errors and improve clarity in this email. Output only the corrected email body text.',
+        formal: 'Rewrite this email in a formal academic tone. Output only the rewritten email body text.',
+        friendly: 'Rewrite this email in a warm, approachable, yet professional tone. Output only the rewritten email body text.'
+      };
+      const instruction = instructions[action] || instructions.grammar;
+      const result = await this.call(emailBody, instruction);
+      // Try to parse as JSON in case it wrapped the result
+      try { const parsed = JSON.parse(result); return parsed.body || parsed.text || parsed.email || result; } catch { return result; }
+    }
+  };
+
+  // ===== Cloud Backup (Google Drive AppData) =====
+  const CloudBackup = {
+    fileId: null,
+    syncTimeout: null,
+    isSyncing: false,
+    sync() {
+      // Debounced sync — reduced to 500ms to prevent data loss if user closes tab
+      clearTimeout(this.syncTimeout);
+      this.syncTimeout = setTimeout(() => this._upload(), 500);
+    },
+    async _upload() {
+      if (!state.googleToken || this.isSyncing) return;
+      this.isSyncing = true;
+      try {
+        let btn = document.getElementById('force-sync-btn');
+        if (btn) btn.textContent = '☁️ Syncing up...';
+        const data = {
+          templates: state.templates,
+          applications: state.applications,
+          outbox: state.outbox,
+          settings: { userName: state.settings.userName, userBackground: state.settings.userBackground }
+        };
+        const metadata = { name: 'profscout_backup.json', mimeType: 'application/json' };
+        
+        if (this.fileId) {
+          // Update existing
+          await fetch(`https://www.googleapis.com/upload/drive/v3/files/${this.fileId}?uploadType=media`, {
+            method: 'PATCH',
+            headers: { Authorization: 'Bearer ' + state.googleToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+          });
+        } else {
+          // Create new in appDataFolder
+          metadata.parents = ['appDataFolder'];
+          const form = new FormData();
+          form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+          form.append('file', new Blob([JSON.stringify(data)], { type: 'application/json' }));
+          const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer ' + state.googleToken },
+            body: form
+          });
+          const result = await res.json();
+          this.fileId = result.id;
+        }
+        
+        btn = document.getElementById('force-sync-btn');
+        if (btn) btn.textContent = '✅ Synced to Cloud';
+      } catch(e) { 
+        console.warn('Cloud backup failed:', e); 
+        let btn = document.getElementById('force-sync-btn');
+        if (btn) btn.textContent = '❌ Sync Failed';
+      } finally {
+        this.isSyncing = false;
+      }
+    },
+    async loadFromCloud() {
+      if (!state.googleToken || this.isSyncing) return;
+      this.isSyncing = true;
+      try {
+        let btn = document.getElementById('force-sync-btn');
+        if (btn) btn.textContent = '☁️ Downloading...';
+        // Find the backup file
+        const listRes = await fetch("https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name='profscout_backup.json'&fields=files(id,modifiedTime)", {
+          headers: { Authorization: 'Bearer ' + state.googleToken }
+        });
+        const listData = await listRes.json();
+        if (!listData.files || listData.files.length === 0) return;
+        
+        this.fileId = listData.files[0].id;
+        const fileRes = await fetch(`https://www.googleapis.com/drive/v3/files/${this.fileId}?alt=media`, {
+          headers: { Authorization: 'Bearer ' + state.googleToken }
+        });
+        const cloudData = await fileRes.json();
+        
+        // Merge: cloud wins for arrays, merge for objects
+        if (cloudData.templates && cloudData.templates.length > 0) {
+          state.templates = cloudData.templates;
+          StorageManager.save('templates', state.templates);
+          if (state.templates.length > 0) state.activeTemplateId = state.templates[0].id;
+        }
+        if (cloudData.applications && Object.keys(cloudData.applications).length > 0) {
+          state.applications = { ...state.applications, ...cloudData.applications };
+          StorageManager.save('applications', state.applications);
+        }
+        if (cloudData.outbox && cloudData.outbox.length > 0) {
+          // Merge by id, cloud wins
+          const existingIds = new Set(state.outbox.map(e => e.id));
+          cloudData.outbox.forEach(e => { if (!existingIds.has(e.id)) state.outbox.push(e); });
+          StorageManager.save('outbox', state.outbox);
+        }
+        if (cloudData.settings) {
+          if (cloudData.settings.userName) state.settings.userName = cloudData.settings.userName;
+          if (cloudData.settings.userBackground) state.settings.userBackground = cloudData.settings.userBackground;
+          saveSettings();
+        }
+        
+        // Re-render the active view to show the restored data
+        if (window.location.hash.includes('outbox')) {
+          renderOutboxPage();
+        } else if (window.location.hash.includes('templates')) {
+          renderTemplatesPage();
+        } else {
+          renderMatchPage();
+        }
+        console.log('Successfully restored data from Cloud Backup.');
+        btn = document.getElementById('force-sync-btn');
+        if (btn) btn.textContent = '✅ Synced to Cloud';
+      } catch(e) { 
+        console.warn('Cloud restore failed:', e);
+        let btn = document.getElementById('force-sync-btn');
+        if (btn) btn.textContent = '❌ Sync Failed';
+      } finally {
+        this.isSyncing = false;
+      }
+    }
+  };
+
+  // ===== Mail Page =====
+  function renderOutboxPage() {
+    const sent = state.outbox.filter(e => e.status === 'sent');
+    const drafts = state.outbox.filter(e => e.status === 'draft');
     return `
       <div class="page-header" style="display:flex; justify-content:space-between; align-items:center;">
         <div>
           <h1 class="page-title">Mail</h1>
-          <div style="color:var(--text-muted); margin-top:0.5rem; font-size:0.9rem;">Emails are synced directly with your Gmail.</div>
+          <div style="color:var(--text-muted); margin-top:0.5rem; font-size:0.9rem;">Emails sent via your Gmail account.</div>
         </div>
-        <button class="btn btn-secondary" id="sync-gmail-btn">Sync Gmail Status</button>
       </div>
       
-      <h2 style="margin-top: 1rem; margin-bottom: 1rem; font-size: 1.2rem; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">Scheduled Emails</h2>
-      <div style="background-color: rgba(255, 152, 0, 0.1); border-left: 4px solid var(--accent-3); padding: 1rem; margin-bottom: 1rem; border-radius: 4px; color: var(--text-primary);">
-        <strong>⚠️ Important Note:</strong> Gmail does not natively support API scheduling. These emails are scheduled <strong>locally</strong>. Your Python terminal server (<code>serve.py</code>) <strong>must remain running</strong> at the scheduled time in order for the emails to be sent!
-      </div>
-      <div id="outbox-scheduled-list" class="tracker-grid">
-        <div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted);">Loading...</div>
-      </div>
-      
-      <h2 style="margin-top: 2rem; margin-bottom: 1rem; font-size: 1.2rem; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">Sent Emails</h2>
+      <h2 style="margin-top: 1rem; margin-bottom: 1rem; font-size: 1.2rem; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">Sent Emails (${sent.length})</h2>
       <div id="outbox-sent-list" class="tracker-grid">
-        <div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted);">Loading...</div>
+        ${sent.length === 0 
+          ? '<div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 1rem;">No sent emails yet.</div>'
+          : sent.map(renderEmailCard).join('')}
+      </div>
+      
+      <h2 style="margin-top: 2rem; margin-bottom: 1rem; font-size: 1.2rem; color: var(--text-primary); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">Drafts (${drafts.length})</h2>
+      <div id="outbox-drafts-list" class="tracker-grid">
+        ${drafts.length === 0 
+          ? '<div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 1rem;">No drafts.</div>'
+          : drafts.map(renderEmailCard).join('')}
       </div>
     `;
   }
-  
-  async function initOutboxPage() {
-    const scheduledListEl = document.getElementById('outbox-scheduled-list');
-    const sentListEl = document.getElementById('outbox-sent-list');
-    
-    document.getElementById('sync-gmail-btn')?.addEventListener('click', async (e) => {
-      const btn = e.target;
-      btn.textContent = 'Syncing...';
-      btn.disabled = true;
-      try {
-        const res = await fetch('/api/sync-imap', { method: 'POST' });
-        if (res.ok) {
-          const data = await res.json();
-          alert('✅ ' + data.message);
-          initOutboxPage();
-        } else {
-          alert('❌ Failed to sync with Gmail.');
-          btn.textContent = 'Sync Gmail Status';
-          btn.disabled = false;
-        }
-      } catch (err) {
-        alert('❌ Network error during sync.');
-        btn.textContent = 'Sync Gmail Status';
-        btn.disabled = false;
-      }
-    });
 
-    try {
-      const res = await fetch('/api/outbox');
-      const data = await res.json();
-      const outbox = data.outbox || [];
-      
-      const scheduled = outbox.filter(e => e.status === 'pending');
-      const sent = outbox.filter(e => e.status !== 'pending');
-      
-      const renderEmailCard = (email) => {
-        const d = new Date(email.sendAt);
-        const statusColor = email.status === 'sent' ? 'var(--accent-4)' : (email.status === 'failed' ? 'var(--accent-danger)' : 'var(--accent-5)');
-        return `
-          <div class="prof-card">
-            <h3 class="prof-name" style="font-size:1.1rem; margin-bottom: 0.5rem;">To: ${escapeHtml(email.profName || email.to)}</h3>
-            <div style="color:var(--text-muted); font-size:0.85rem; margin-bottom: 0.5rem;">${escapeHtml(email.to)}</div>
-            <div class="prof-uni" style="color:var(--text-primary); margin-bottom: 0.5rem;"><strong>Subject:</strong> ${escapeHtml(email.subject)}</div>
-            <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom: 1rem;">
-              <strong>Scheduled for:</strong> ${d.toLocaleString()}<br>
-              <strong>Status:</strong> <span style="color:${statusColor}">${email.status.toUpperCase()}</span>
-              ${email.errorMsg ? '<br><span style="color:var(--accent-danger)">Error: ' + escapeHtml(email.errorMsg) + '</span>' : ''}
-            </div>
-            <div style="display:flex; gap:0.5rem;">
-              <a href="https://mail.google.com/mail/u/0/#search/rfc822msgid%3A%3C${email.id}%40profscout.local%3E" target="_blank" class="btn btn-primary" style="text-decoration:none; display:inline-block; font-size: 0.8rem; padding: 4px 8px;" title="View in Gmail">📧 Gmail</a>
-              ${email.status === 'pending' ? `<button class="btn btn-secondary" onclick="cancelEmail('${email.id}')" style="font-size: 0.8rem; padding: 4px 8px;">Cancel</button>` : ''}
-            </div>
-          </div>
-        `;
-      };
-      
-      if (scheduled.length === 0) {
-        scheduledListEl.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 1rem;">No scheduled emails.</div>';
-      } else {
-        scheduledListEl.innerHTML = scheduled.map(renderEmailCard).join('');
-      }
-      
-      if (sent.length === 0) {
-        sentListEl.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: var(--text-muted); padding: 1rem;">No sent emails found.</div>';
-      } else {
-        sentListEl.innerHTML = sent.map(renderEmailCard).join('');
-      }
-      
-    } catch(err) {
-      scheduledListEl.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: var(--accent-danger);">Failed to load outbox.</div>';
-      sentListEl.innerHTML = '';
-    }
+  function renderEmailCard(email) {
+    const d = new Date(email.sentAt || email.createdAt);
+    const statusColor = email.status === 'sent' ? 'var(--accent-4)' : 'var(--accent-5)';
+    return `
+      <div class="prof-card">
+        <h3 class="prof-name" style="font-size:1.1rem; margin-bottom: 0.5rem;">To: ${escapeHtml(email.profName || email.to)}</h3>
+        <div style="color:var(--text-muted); font-size:0.85rem; margin-bottom: 0.5rem;">${escapeHtml(email.to)}</div>
+        <div class="prof-uni" style="color:var(--text-primary); margin-bottom: 0.5rem;"><strong>Subject:</strong> ${escapeHtml(email.subject)}</div>
+        <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom: 1rem;">
+          <strong>${email.status === 'sent' ? 'Sent:' : 'Created:'}</strong> ${d.toLocaleString()}<br>
+          <strong>Status:</strong> <span style="color:${statusColor}">${email.status.toUpperCase()}</span>
+        </div>
+        <div style="display:flex; gap:0.5rem;">
+          <a href="https://mail.google.com/mail/u/0/#sent" target="_blank" class="btn btn-primary" style="text-decoration:none; display:inline-block; font-size: 0.8rem; padding: 4px 8px;" title="View in Gmail">📧 Gmail</a>
+          <button class="btn btn-secondary delete-outbox-btn" data-id="${email.id}" style="font-size: 0.8rem; padding: 4px 8px;">🗑️ Remove</button>
+        </div>
+      </div>
+    `;
   }
-  
-  window.cancelEmail = async (id) => {
-    if (!confirm('Are you sure you want to cancel this scheduled email?')) return;
-    try {
-      await fetch('/api/outbox/' + id, { method: 'DELETE' });
-      initOutboxPage();
-    } catch(err) {
-      alert('Failed to cancel email.');
-    }
-  };
+
+  function initOutboxPage() {
+    document.querySelectorAll('.delete-outbox-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const id = e.target.dataset.id;
+        if (!confirm('Remove this email from history?')) return;
+        state.outbox = state.outbox.filter(em => em.id !== id);
+        saveOutbox();
+        route();
+      });
+    });
+  }
 
   // ===== State =====
   const state = {
     professors: [],
     institutions: {},
     areas: {},
+    categories: {},
+    selectedInterests: new Set(),
     loaded: false,
     currentPage: 'discover',
     // Discover page state
@@ -184,30 +459,35 @@
     templates: [],
     activeTemplateId: null,
     applications: {},
-    settings: { llmProvider: 'openai', apiKey: '', userName: '', userBackground: '', smtpEmail: '', smtpPassword: '' }
+    settings: { userName: '', userBackground: '', apiKey: '', llmProvider: 'gemini' },
+    outbox: [],
+    // Google Auth
+    googleToken: null,
+    googleUser: null
   };
 
-  // ===== Backend Storage =====
-  async function saveTemplates() {
-    await fetch('/api/templates', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(state.templates)
-    });
+  // ===== StorageManager (localStorage) =====
+  const StorageManager = {
+    save(key, data) { try { localStorage.setItem('ps_' + key, JSON.stringify(data)); } catch(e) { console.warn('Storage save failed:', e); } },
+    load(key, fallback) { try { const raw = localStorage.getItem('ps_' + key); return raw ? JSON.parse(raw) : fallback; } catch(e) { return fallback; } },
+    remove(key) { localStorage.removeItem('ps_' + key); }
+  };
+
+  function saveTemplates() {
+    StorageManager.save('templates', state.templates);
+    CloudBackup.sync();
   }
-  async function saveApplications() {
-    await fetch('/api/applications', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(state.applications)
-    });
+  function saveApplications() {
+    StorageManager.save('applications', state.applications);
+    CloudBackup.sync();
   }
-  async function saveSettings() {
-    await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(state.settings)
-    });
+  function saveSettings() {
+    StorageManager.save('settings', state.settings);
+    CloudBackup.sync();
+  }
+  function saveOutbox() {
+    StorageManager.save('outbox', state.outbox);
+    CloudBackup.sync();
   }
 
   // ===== Data Loader =====
@@ -215,8 +495,8 @@
     const loadingBar = document.getElementById('loading-bar-fill');
     try {
       loadingBar.style.width = '20%';
-      const [profRes, instRes, areaRes, stateRes] = await Promise.all([
-        fetch('data/professors.json'), fetch('data/institutions.json'), fetch('data/areas.json'), fetch('/api/state').catch(() => null)
+      const [profRes, instRes, areaRes] = await Promise.all([
+        fetch('data/professors.json'), fetch('data/institutions.json'), fetch('data/areas.json')
       ]);
       loadingBar.style.width = '60%';
       state.professors = await profRes.json();
@@ -225,27 +505,28 @@
       state.areas = areaData.areas || {};
       state.categories = areaData.categories || {};
       
-      try {
-        if (!stateRes || !stateRes.ok) throw new Error("Backend not available");
-        const serverState = await stateRes.json();
-        state.settings = serverState.settings;
-        state.templates = serverState.templates;
-        if (state.templates.length > 0) {
-          state.activeTemplateId = state.templates[0].id;
-        }
-        state.applications = serverState.applications;
-      } catch (e) {
-        // Fallback for static hosting (GitHub Pages / Netlify)
-        state.isStatic = true;
-        state.settings = { provider: 'openai', openaiKey: '', anthropicKey: '', geminiKey: '', senderName: '', senderEmail: '', smtpHost: 'smtp.gmail.com', smtpPort: 587, smtpUser: '', smtpPass: '', imapHost: 'imap.gmail.com', imapPort: 993, smtpProtocol: 'tls' };
-        state.templates = [];
-        state.applications = {};
+      // Load user data from localStorage
+      state.settings = StorageManager.load('settings', state.settings);
+      state.templates = StorageManager.load('templates', []);
+      state.applications = StorageManager.load('applications', {});
+      state.outbox = StorageManager.load('outbox', []);
+      if (state.templates.length > 0) {
+        state.activeTemplateId = state.templates[0].id;
+      }
+      
+      const savedAuth = StorageManager.load('auth', null);
+      if (savedAuth && savedAuth.expiresAt > Date.now()) {
+        state.googleToken = savedAuth.token;
+        state.googleUser = savedAuth.user;
+        updateAuthUI();
+        CloudBackup.loadFromCloud();
       }
 
       loadingBar.style.width = '100%';
       state.loaded = true;
       document.getElementById('stat-professors').textContent = `${state.professors.length.toLocaleString()} Professors`;
       await new Promise(r => setTimeout(r, 300));
+      document.getElementById('loading-screen').style.display = 'none';
       initModals();
       route();
     } catch (err) {
@@ -313,23 +594,8 @@
   }
 
   function openSettingsModal() {
-    const provider = state.settings.llmProvider || 'openai';
+    const provider = state.settings.llmProvider || 'gemini';
     const bodyHtml = `
-      <div class="form-group">
-        <label class="form-label">LLM Provider</label>
-        <select class="form-input" id="setting-llm-provider">
-          <option value="openai" ${provider === 'openai' ? 'selected' : ''}>OpenAI</option>
-          <option value="gemini" ${provider === 'gemini' ? 'selected' : ''}>Google Gemini</option>
-          <option value="anthropic" ${provider === 'anthropic' ? 'selected' : ''}>Anthropic</option>
-        </select>
-      </div>
-      <div class="form-group" style="position: relative;">
-        <label class="form-label">API Key</label>
-        <div style="display: flex; gap: 0.5rem;">
-          <input type="password" class="form-input" id="setting-api-key" value="${escapeHtml(state.settings.apiKey || '')}" placeholder="Your API Key" style="flex:1;">
-          <button class="btn btn-secondary" id="test-llm-btn" style="white-space: nowrap;">Test API</button>
-        </div>
-      </div>
       <div class="form-group">
         <label class="form-label">Your Name</label>
         <input type="text" class="form-input" id="setting-name" value="${escapeHtml(state.settings.userName || '')}" placeholder="e.g. Jane Doe">
@@ -339,16 +605,30 @@
         <textarea class="form-textarea" id="setting-background" placeholder="e.g. I am a master's student with 2 years of research experience in computer vision..." style="min-height: 80px">${escapeHtml(state.settings.userBackground || '')}</textarea>
       </div>
       <div class="form-group" style="margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem;">
-        <label class="form-label">Gmail Address (for sending emails)</label>
-        <input type="email" class="form-input" id="setting-smtp-email" value="${escapeHtml(state.settings.smtpEmail || '')}" placeholder="your.email@gmail.com">
+        <label class="form-label">Google OAuth Client ID (Required for Sign-In)</label>
+        <input type="text" class="form-input" id="setting-google-client-id" value="${escapeHtml(state.settings.googleClientId || '')}" placeholder="...apps.googleusercontent.com">
+      </div>
+      <div class="form-group" style="margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+        <label class="form-label">AI Provider</label>
+        <select class="form-input" id="setting-llm-provider">
+          <option value="gemini" ${provider === 'gemini' ? 'selected' : ''}>Google Gemini (Free API Key)</option>
+          <option value="openai" ${provider === 'openai' ? 'selected' : ''}>OpenAI</option>
+          <option value="anthropic" ${provider === 'anthropic' ? 'selected' : ''}>Anthropic</option>
+        </select>
       </div>
       <div class="form-group">
-        <label class="form-label">Google App Password</label>
-        <div style="display: flex; gap: 0.5rem;">
-          <input type="password" class="form-input" id="setting-smtp-password" value="${escapeHtml(state.settings.smtpPassword || '')}" placeholder="16-character app password" style="flex:1;">
-          <button class="btn btn-secondary" id="test-smtp-btn" style="white-space: nowrap;">Test SMTP</button>
+        <label class="form-label">API Key</label>
+        <input type="password" class="form-input" id="setting-api-key" value="${escapeHtml(state.settings.apiKey || '')}" placeholder="Paste your API key here">
+        <div style="font-size: 0.8rem; margin-top: 0.25rem; color: var(--text-muted);">
+          Get a free Gemini API key from <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--primary)">Google AI Studio</a>.
         </div>
-        <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Standard Gmail passwords do not work. Generate an App Password in your Google Account settings.</div>
+      </div>
+      <div class="form-group" style="margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+        <label class="form-label">Cloud Backup</label>
+        <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.5rem;">
+          Your data automatically syncs to a hidden Google Drive folder when you make changes. 
+        </div>
+        <button class="btn btn-secondary" id="force-sync-btn" style="width: 100%;">🔄 Force Sync Now</button>
       </div>
     `;
     const footerHtml = `
@@ -358,62 +638,18 @@
     openModal('Settings', bodyHtml, footerHtml);
     document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
     document.getElementById('modal-save-settings-btn').addEventListener('click', () => {
+      state.settings.googleClientId = document.getElementById('setting-google-client-id').value.trim();
       state.settings.llmProvider = document.getElementById('setting-llm-provider').value;
       state.settings.apiKey = document.getElementById('setting-api-key').value.trim();
       state.settings.userName = document.getElementById('setting-name').value.trim();
       state.settings.userBackground = document.getElementById('setting-background').value.trim();
-      state.settings.smtpEmail = document.getElementById('setting-smtp-email').value.trim();
-      state.settings.smtpPassword = document.getElementById('setting-smtp-password').value.trim();
       saveSettings();
       closeModal();
     });
-
-    document.getElementById('test-llm-btn').addEventListener('click', async (e) => {
-      const btn = e.target;
-      const originalText = btn.textContent;
-      btn.textContent = 'Testing...';
-      btn.disabled = true;
-      try {
-        const res = await fetch('/api/test-llm', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            llmProvider: document.getElementById('setting-llm-provider').value,
-            apiKey: document.getElementById('setting-api-key').value.trim()
-          })
-        });
-        const data = await res.json();
-        if (res.ok) alert('✅ ' + data.message);
-        else alert('❌ ' + (data.detail || 'Test failed'));
-      } catch (err) {
-        alert('❌ Network error testing API key.');
-      }
-      btn.textContent = originalText;
-      btn.disabled = false;
-    });
-
-    document.getElementById('test-smtp-btn').addEventListener('click', async (e) => {
-      const btn = e.target;
-      const originalText = btn.textContent;
-      btn.textContent = 'Testing...';
-      btn.disabled = true;
-      try {
-        const res = await fetch('/api/test-smtp', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            smtpEmail: document.getElementById('setting-smtp-email').value.trim(),
-            smtpPassword: document.getElementById('setting-smtp-password').value.trim()
-          })
-        });
-        const data = await res.json();
-        if (res.ok) alert('✅ ' + data.message);
-        else alert('❌ ' + (data.detail || 'Test failed'));
-      } catch (err) {
-        alert('❌ Network error testing SMTP login.');
-      }
-      btn.textContent = originalText;
-      btn.disabled = false;
+    document.getElementById('force-sync-btn').addEventListener('click', async () => {
+      if (!state.googleToken) return alert('You must sign in with Google first!');
+      await CloudBackup.loadFromCloud();
+      await CloudBackup._upload();
     });
   }
 
@@ -428,234 +664,214 @@
     document.getElementById('app-modal').classList.remove('active');
   }
 
-  function renderEmailPreview(profName, univName, profAreasStr) {
-    const template = state.templates.find(t => t.id === state.activeTemplateId) || state.templates[0];
-    if (!template) return { subject: '', body: '' };
-
-    const parts = profName.split(' ');
-    const lastName = parts[parts.length - 1];
-    const firstName = parts[0];
-
-    const context = {
-      prof_name: profName,
-      prof_lastName: lastName,
-      prof_firstName: firstName,
-      univ_name: univName,
-      research_area: profAreasStr || 'your research',
-      my_name: '[Your Name]'
-    };
-
-    let subject = template.subject;
-    let body = template.body;
-
-    for (const [key, val] of Object.entries(context)) {
-      const regex = new RegExp(`{{${key}}}`, 'g');
-      subject = subject.replace(regex, val);
-      body = body.replace(regex, val);
-    }
-    return { subject, body };
-  }
-
   function openEmailModal(prof) {
-    const profName = prof.n;
-    const univName = prof.a;
-    const profAreasStr = prof.ar.slice(0,2).map(getAreaLabel).join(' and ');
-
-    const updatePreview = () => {
-      const { subject, body } = renderEmailPreview(profName, univName, profAreasStr);
-      document.getElementById('email-preview-subject').value = subject;
-      document.getElementById('email-preview-body').value = body;
-    };
-
-    const templateOptions = state.templates.map(t =>
-      `<option value="${t.id}" ${t.id === state.activeTemplateId ? 'selected' : ''}>${escapeHtml(t.name)}</option>`
-    ).join('');
-
+    const profName = prof ? prof.n : '';
+    const univName = prof ? prof.a : '';
+    const profAreasStr = prof ? prof.ar.slice(0,2).map(getAreaLabel).join(', ') : '';
+    const toEmail = profName ? profName.toLowerCase().replace(/[^a-z0-9]+/g, '.') + '@example.edu' : '';
+    
     const bodyHtml = `
-      <div class="form-group">
-        <label class="form-label">Select Template</label>
-        <select class="form-input" id="email-template-select">
-          ${templateOptions}
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+        <div class="form-group">
+          <label class="form-label">To (Email)</label>
+          <input type="text" class="form-input" id="c-to" value="${escapeHtml(toEmail)}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Professor Name</label>
+          <input type="text" class="form-input" id="c-name" value="${escapeHtml(profName)}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">University</label>
+          <input type="text" class="form-input" id="c-univ" value="${escapeHtml(univName)}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Prof's Research Interests</label>
+          <input type="text" class="form-input" id="c-interests" value="${escapeHtml(profAreasStr)}">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Paper Title (Optional)</label>
+          <input type="text" class="form-input" id="c-paper" placeholder="e.g. Attention is All You Need">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Your Research Interests</label>
+          <input type="text" class="form-input" id="c-my-interests" value="${escapeHtml(state.settings.userBackground || '')}">
+        </div>
+      </div>
+      
+      <div class="form-group" style="margin-bottom: 0.5rem;">
+        <label class="form-label">Select Template (Auto-fills Subject and Body)</label>
+        <select class="form-input" id="c-template">
+          <option value="">-- Start from scratch --</option>
+          ${state.templates.map(t => `<option value="${t.id}" ${t.id === state.activeTemplateId ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('')}
         </select>
       </div>
+
       <div class="form-group">
         <label class="form-label">Subject</label>
-        <input type="text" class="form-input" id="email-preview-subject">
+        <input type="text" class="form-input" id="c-subject">
       </div>
+      
       <div class="form-group">
-        <label class="form-label">Body</label>
-        <textarea class="form-textarea" id="email-preview-body" style="min-height: 200px"></textarea>
-      </div>
-      <div class="form-group" style="margin-top: 1rem; border-top: 1px solid var(--border-subtle); padding-top: 1rem;">
-        <label class="form-label">Schedule Send (Optional)</label>
-        <input type="datetime-local" class="form-input" id="email-schedule-time">
-        <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">Leave blank to send immediately. (Ensure ProfScout server is running at the scheduled time).</div>
+        <div style="display:flex; justify-content:space-between; align-items:flex-end;">
+          <label class="form-label">Email Body</label>
+          <div style="display:flex; gap:0.25rem; margin-bottom:0.25rem;">
+            <button class="btn btn-secondary ai-polish-btn" data-action="enhance" title="Full Rewrite" style="padding: 2px 6px; font-size: 0.8rem;">✨ Enhance</button>
+            <button class="btn btn-secondary ai-polish-btn" data-action="shorten" title="Make it shorter" style="padding: 2px 6px; font-size: 0.8rem;">📝 Shorten</button>
+            <button class="btn btn-secondary ai-polish-btn" data-action="expand" title="Add detail" style="padding: 2px 6px; font-size: 0.8rem;">📖 Expand</button>
+            <button class="btn btn-secondary ai-polish-btn" data-action="grammar" title="Fix grammar" style="padding: 2px 6px; font-size: 0.8rem;">🔤 Grammar</button>
+            <button class="btn btn-secondary ai-polish-btn" data-action="formal" title="Formal tone" style="padding: 2px 6px; font-size: 0.8rem;">🎯 Formal</button>
+            <button class="btn btn-secondary ai-polish-btn" data-action="friendly" title="Friendly tone" style="padding: 2px 6px; font-size: 0.8rem;">💬 Friendly</button>
+          </div>
+        </div>
+        <textarea class="form-textarea" id="c-body" style="min-height: 250px"></textarea>
       </div>
     `;
 
     const footerHtml = `
-      <div style="flex:1">
-        <button class="btn btn-secondary ai-btn" id="modal-ai-btn">✨ Generate with AI</button>
-      </div>
+      <div style="flex:1; font-size:0.8rem; color:var(--text-muted);">Emails are sent directly from your Gmail.</div>
       <button class="btn btn-secondary" id="modal-cancel-btn">Cancel</button>
-      <button class="btn btn-primary" id="modal-send-btn">Send Now</button>
-      <button class="btn btn-primary" id="modal-schedule-btn" style="display:none; background:var(--accent-4);">Schedule Send</button>
+      <button class="btn btn-secondary" id="modal-draft-btn">Save Draft</button>
+      <button class="btn btn-primary" id="modal-send-btn">📧 Send Now</button>
     `;
 
-    openModal(`Email ${profName}`, bodyHtml, footerHtml);
-    updatePreview();
+    openModal(profName ? `Compose Email to ${profName}` : 'Compose Email', bodyHtml, footerHtml);
 
-    document.getElementById('email-template-select').addEventListener('change', (e) => {
-      state.activeTemplateId = e.target.value;
-      updatePreview();
-    });
-
-    const scheduleInput = document.getElementById('email-schedule-time');
-    const sendBtn = document.getElementById('modal-send-btn');
-    const scheduleBtn = document.getElementById('modal-schedule-btn');
-
-    scheduleInput.addEventListener('change', (e) => {
-      if (e.target.value) {
-        sendBtn.style.display = 'none';
-        scheduleBtn.style.display = 'inline-block';
-      } else {
-        sendBtn.style.display = 'inline-block';
-        scheduleBtn.style.display = 'none';
+    const updatePreview = () => {
+      const templateId = document.getElementById('c-template').value;
+      if (!templateId) return;
+      const t = state.templates.find(x => x.id === templateId);
+      if (!t) return;
+      
+      const parts = document.getElementById('c-name').value.split(' ');
+      const ctx = {
+        prof_name: document.getElementById('c-name').value,
+        prof_lastName: parts[parts.length - 1] || '',
+        prof_firstName: parts[0] || '',
+        univ_name: document.getElementById('c-univ').value,
+        research_area: document.getElementById('c-interests').value,
+        my_name: state.settings.userName || '[Your Name]',
+        my_background: document.getElementById('c-my-interests').value,
+        paper_title: document.getElementById('c-paper').value
+      };
+      
+      let sub = t.subject;
+      let bod = t.body;
+      for (const [k, v] of Object.entries(ctx)) {
+        sub = sub.replace(new RegExp(`{{${k}}}`, 'g'), v);
+        bod = bod.replace(new RegExp(`{{${k}}}`, 'g'), v);
       }
+      document.getElementById('c-subject').value = sub;
+      document.getElementById('c-body').value = bod;
+    };
+
+    document.getElementById('c-template').addEventListener('change', updatePreview);
+    if (state.activeTemplateId) updatePreview();
+
+    // Re-render on field blur to update merge tags dynamically
+    ['c-name', 'c-univ', 'c-interests', 'c-paper', 'c-my-interests'].forEach(id => {
+      document.getElementById(id).addEventListener('blur', updatePreview);
     });
 
     document.getElementById('modal-cancel-btn').addEventListener('click', closeModal);
 
-    const handleSend = async (isScheduled, btnElement) => {
-      if (!state.settings.smtpEmail || !state.settings.smtpPassword) {
-        alert('Please configure your Gmail Address and App Password in Settings first.');
-        closeModal();
-        openSettingsModal();
-        return;
-      }
+    // Handle AI Polish Buttons
+    document.querySelectorAll('.ai-polish-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const action = e.target.dataset.action;
+        const bodyEl = document.getElementById('c-body');
+        const currentText = bodyEl.value.trim();
+        if (!currentText) return alert("Please enter some email body text first.");
+        
+        e.target.disabled = true;
+        const origText = e.target.textContent;
+        e.target.textContent = '⏳';
+        
+        try {
+          // If enhance, combine all inputs as context
+          let prompt = currentText;
+          if (action === 'enhance') {
+            prompt = `Context: 
+Prof Name: ${document.getElementById('c-name').value}
+University: ${document.getElementById('c-univ').value}
+Prof Interests: ${document.getElementById('c-interests').value}
+Student Interests: ${document.getElementById('c-my-interests').value}
+Paper: ${document.getElementById('c-paper').value}
+
+Current Draft:
+${currentText}`;
+          }
+          
+          const polished = await AIService.polish(prompt, action);
+          bodyEl.value = polished;
+          document.getElementById('c-template').value = ''; // Detach from template
+        } catch(err) {
+          console.error(err);
+          alert('AI Error: ' + err.message);
+        } finally {
+          e.target.disabled = false;
+          e.target.textContent = origText;
+        }
+      });
+    });
+
+    // Handle Send/Draft
+    const processEmail = async (isDraft) => {
+      if (!state.googleToken) return alert('You must be signed in with Google to send or save emails!');
+      const btnId = isDraft ? 'modal-draft-btn' : 'modal-send-btn';
+      const btn = document.getElementById(btnId);
+      const to = document.getElementById('c-to').value;
+      const sub = document.getElementById('c-subject').value;
+      const bod = document.getElementById('c-body').value;
       
-      btnElement.disabled = true;
-      const originalHtml = btnElement.innerHTML;
-      btnElement.innerHTML = '<span class="btn-spinner"></span> ' + (isScheduled ? 'Scheduling...' : 'Sending...');
+      if (!to || !sub || !bod) return alert("To, Subject, and Body are required.");
+      
+      btn.disabled = true;
+      const origText = btn.textContent;
+      btn.innerHTML = '<span class="btn-spinner"></span> ' + (isDraft ? 'Saving...' : 'Sending...');
       
       try {
-        const sub = document.getElementById('email-preview-subject').value;
-        const bod = document.getElementById('email-preview-body').value;
-        const fakeEmail = profName.toLowerCase().replace(/[^a-zA-Z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') + '@example.edu';
-        
-        let sendAtMs = null;
-        if (isScheduled && scheduleInput.value) {
-          sendAtMs = new Date(scheduleInput.value).getTime();
-          if (sendAtMs <= Date.now()) {
-            throw new Error("Scheduled time must be in the future.");
-          }
+        if (isDraft) {
+          await GmailService.createDraft(to, sub, bod);
+        } else {
+          await GmailService.send(to, sub, bod);
         }
         
-        const response = await fetch('/api/send-email', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            to: fakeEmail,
-            profName: profName,
-            subject: sub,
-            body: bod,
-            sendAt: sendAtMs
-          })
+        // Save to outbox tracker
+        state.outbox.unshift({
+          id: generateId(),
+          to: to,
+          profName: document.getElementById('c-name').value,
+          subject: sub,
+          status: isDraft ? 'draft' : 'sent',
+          createdAt: Date.now()
         });
+        saveOutbox();
         
-        if (!response.ok) {
-          const err = await response.json();
-          throw new Error(err.detail || 'Failed to process email request');
+        // Update Kanban if tied to a prof
+        if (prof) {
+          const profId = prof.n + '_' + prof.a;
+          if (!state.applications[profId]) toggleTrackProfessor(prof);
+          if (!isDraft) state.applications[profId].status = 'contacted';
+          saveApplications();
         }
         
-        alert(isScheduled ? 'Email scheduled successfully!' : 'Email sent successfully via Gmail!');
-        
-        const profId = prof.n + '_' + prof.a;
-        if (!state.applications[profId]) toggleTrackProfessor(prof);
-        state.applications[profId].status = 'contacted';
-        saveApplications();
+        alert(isDraft ? 'Draft saved to Gmail!' : 'Email sent successfully via Gmail!');
         route();
         closeModal();
-      } catch (err) {
+      } catch(err) {
         console.error(err);
-        alert('Failed: ' + err.message);
-        btnElement.disabled = false;
-        btnElement.innerHTML = originalHtml;
+        alert('Failed: ' + err.message + '. Ensure you are signed in with Google and popups are allowed.');
+        btn.disabled = false;
+        btn.textContent = origText;
       }
     };
-
-    sendBtn.addEventListener('click', (e) => handleSend(false, e.target));
-    scheduleBtn.addEventListener('click', (e) => handleSend(true, e.target));
-
-    document.getElementById('modal-ai-btn').addEventListener('click', (e) => {
-      const subjectInput = document.getElementById('email-preview-subject');
-      const bodyInput = document.getElementById('email-preview-body');
-      generateEmailWithAI(prof, profAreasStr, subjectInput, bodyInput, e.target);
-    });
-  }
-
-  async function generateEmailWithAI(prof, profAreasStr, subjectInput, bodyInput, btn) {
-    if (!state.settings.apiKey) {
-      alert('Please configure your OpenAI API Key in Settings first.');
-      closeModal();
-      openSettingsModal();
-      return;
-    }
     
-    btn.disabled = true;
-    const originalHtml = btn.innerHTML;
-    btn.innerHTML = '<span class="btn-spinner"></span> Generating...';
-
-    try {
-      const systemPrompt = "You are an expert academic advisor helping a prospective grad student write a cold email to a professor. The email must be concise (under 150 words), professional, and highly specific to the professor's research. Avoid cliches. Output ONLY a JSON object with 'subject' and 'body' keys.";
-      const userPrompt = `
-Student: ${state.settings.userName || '[Student Name]'}
-Student Background: ${state.settings.userBackground || 'Interested in CS research.'}
-Professor: ${prof.n} at ${prof.a}
-Professor's Focus Areas: ${profAreasStr}
-Instructions: Draft the cold email. Do not use bracketed placeholders.
-      `;
-
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${state.settings.apiKey}`
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          response_format: { type: 'json_object' }
-        })
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error?.message || 'API request failed');
-      }
-
-      const data = await response.json();
-      const result = JSON.parse(data.choices[0].message.content);
-      
-      subjectInput.value = result.subject || 'Prospective PhD Student';
-      bodyInput.value = result.body || '';
-      
-      // Select custom option in dropdown to indicate template override
-      const select = document.getElementById('email-template-select');
-      select.value = '';
-    } catch (err) {
-      console.error(err);
-      alert('Failed to generate AI draft: ' + err.message);
-    } finally {
-      btn.disabled = false;
-      btn.innerHTML = originalHtml;
-    }
+    document.getElementById('modal-draft-btn').addEventListener('click', () => processEmail(true));
+    document.getElementById('modal-send-btn').addEventListener('click', () => processEmail(false));
   }
 
   function toggleTrackProfessor(prof) {
+    if (!state.googleToken) return alert('You must be signed in with Google to save or track professors. Please sign in at the top right!');
     const profId = prof.n + '_' + prof.a;
     if (state.applications[profId]) {
       delete state.applications[profId];
@@ -665,6 +881,7 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
       };
     }
     saveApplications();
+    CloudBackup.sync();
     if (state.currentPage === 'discover') updateDiscoverResults();
     else if (state.currentPage === 'match') {
       document.getElementById('match-results').innerHTML = renderMatchResults(computeMatches());
@@ -801,8 +1018,8 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
           </div>
           <div class="prof-links">${homepageUrl}${scholarUrl}${stipendLink}</div>
           <div class="prof-actions">
-            <button class="action-btn email-btn" ${state.isStatic ? 'onclick="alert(\'This feature requires the desktop app. Please download ProfScout locally.\')"' : `data-prof='${JSON.stringify(p).replace(/'/g, "&apos;")}'`}>&#9993; Email</button>
-            <button class="action-btn track-btn ${isTracked ? 'tracked' : ''}" ${state.isStatic ? 'onclick="alert(\'This feature requires the desktop app. Please download ProfScout locally.\')"' : `data-prof='${JSON.stringify(p).replace(/'/g, "&apos;")}'`}>
+            <button class="action-btn email-btn" data-prof='${JSON.stringify(p).replace(/'/g, "&apos;")}'>&#9993; Email</button>
+            <button class="action-btn track-btn ${isTracked ? 'tracked' : ''}" data-prof='${JSON.stringify(p).replace(/'/g, "&apos;")}'>
               ${isTracked ? '&#10003; Tracked' : '&#128161; Track'}
             </button>
           </div>
@@ -831,28 +1048,23 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
       if (listEl) listEl.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-muted);">Searching OpenAlex...</div>';
       
       try {
-        const url = 'https://api.openalex.org/authors?search=' + encodeURIComponent(state.searchQuery) + '&sort=cited_by_count:desc&per-page=25';
-        const res = await fetch(url, { headers: { 'User-Agent': 'mailto:profscout@example.com' } });
+        const res = await fetch('https://api.openalex.org/authors?search=' + encodeURIComponent(state.searchQuery));
         if (res.ok) {
           const data = await res.json();
-          // Map OpenAlex response directly in the client
-          state.openAlexResults = (data.results || []).map(author => {
-            const inst = author.last_known_institution;
-            const areas = author.x_concepts ? author.x_concepts.slice(0, 6).map(c => c.display_name) : [];
-            return {
-              n: author.display_name || '',
-              a: inst ? inst.display_name : 'Unknown Institution',
-              h: author.id || '',
-              c: inst ? (inst.country_code || 'US') : 'US',
-              tp: author.works_count || 0,
-              rp: author.cited_by_count || 0,
-              ar: areas
-            };
-          });
+          // Map OpenAlex raw data to ProfScout format
+          state.openAlexResults = (data.results || []).map(a => ({
+            n: a.display_name,
+            a: a.last_known_institution ? a.last_known_institution.display_name : 'Unknown Institution',
+            ar: (a.x_concepts || []).map(c => c.display_name).slice(0, 3),
+            tp: a.works_count || 0,
+            rp: a.cited_by_count || 0,
+            c: a.last_known_institution && a.last_known_institution.country_code ? a.last_known_institution.country_code.toLowerCase() : ''
+          }));
+          
           if (listEl) listEl.innerHTML = renderProfCards(state.openAlexResults, state.displayCount);
           if (countEl) countEl.innerHTML = `Showing top <strong>${state.openAlexResults.length}</strong> results from OpenAlex`;
           if (searchCountEl) searchCountEl.textContent = `${state.openAlexResults.length} results`;
-          if (loadMoreBtn) loadMoreBtn.style.display = 'none'; // OpenAlex just returns top 25
+          if (loadMoreBtn) loadMoreBtn.style.display = 'none'; // OpenAlex just returns top page
           initDiscoverListEvents();
         }
       } catch (e) {
@@ -1031,6 +1243,7 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
       document.getElementById('match-btn').disabled = state.selectedInterests.size === 0;
     });
     document.getElementById('match-btn').addEventListener('click', () => {
+      if (!state.googleToken) return alert('You must be signed in with Google to use the Research Matcher!');
       document.getElementById('match-results').innerHTML = renderMatchResults(computeMatches());
       initMatchListEvents();
     });
@@ -1091,10 +1304,12 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
   }
   function initTemplatesPage() {
     document.getElementById('add-template-btn')?.addEventListener('click', () => {
+      if (!state.googleToken) return alert('You must be signed in with Google to create email templates!');
       const newTpl = { id: generateId(), name: 'New Template', subject: '', body: '' };
       state.templates.push(newTpl);
       state.activeTemplateId = newTpl.id;
       saveTemplates();
+      CloudBackup.sync();
       route();
     });
     document.getElementById('templates-list')?.addEventListener('click', (e) => {
@@ -1105,6 +1320,7 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
         state.templates = state.templates.filter(t => t.id !== id);
         if (state.activeTemplateId === id) state.activeTemplateId = state.templates[0]?.id || null;
         saveTemplates();
+        CloudBackup.sync();
         route();
       } else if (item) {
         state.activeTemplateId = item.dataset.id;
@@ -1120,6 +1336,7 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
           tpl.subject = document.getElementById('tpl-subject').value;
           tpl.body = document.getElementById('tpl-body').value;
           saveTemplates();
+          CloudBackup.sync();
           route(); // re-render list
         }
       });
@@ -1140,19 +1357,6 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
   const COL_NAMES = { saved: 'Saved', contacted: 'Contacted', interviewing: 'Interviewing', accepted: 'Accepted', rejected: 'Rejected' };
 
   function renderTrackerPage() {
-    if (state.isStatic) {
-      return `
-        <div style="text-align:center; padding:4rem; max-width:600px; margin:0 auto;">
-          <h2 style="color:var(--text-primary); margin-bottom:1rem;">Desktop App Required</h2>
-          <p style="color:var(--text-secondary); line-height:1.6; margin-bottom:2rem;">
-            The Application Tracker saves your data to a secure, local SQLite database on your machine to ensure privacy and cross-session persistence. This feature is not available in the static web preview.
-          </p>
-          <a href="https://github.com/satyam-thakur/mail_automation" target="_blank" class="action-btn" style="text-decoration:none; display:inline-block; font-size:1.1rem; padding:0.75rem 1.5rem;">
-            Download Desktop Version
-          </a>
-        </div>
-      `;
-    }
     const appsByCol = {};
     KANBAN_COLS.forEach(c => appsByCol[c] = []);
     Object.values(state.applications).forEach(app => {
@@ -1163,7 +1367,7 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
     return `
       <div class="page-header" style="display:flex; justify-content:space-between; align-items:center;">
         <h1 class="page-title">Application Tracker</h1>
-        <button class="btn btn-primary" id="bulk-schedule-btn" style="background:var(--accent-2);">🗓️ Bulk Schedule Selected</button>
+        <button class="btn btn-primary" id="bulk-schedule-btn" style="background:var(--accent-2);">📧 Bulk Compose Selected</button>
       </div>
       <div class="kanban-board">
         ${KANBAN_COLS.map(col => `
@@ -1240,10 +1444,10 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
     document.getElementById('bulk-schedule-btn').addEventListener('click', () => {
       const selectedIds = Array.from(document.querySelectorAll('.bulk-select-cb:checked')).map(cb => cb.value);
       if (selectedIds.length === 0) {
-        alert("Please select at least one professor to bulk schedule emails.");
+        alert("Please select at least one professor to bulk compose emails.");
         return;
       }
-      openBulkScheduleModal(selectedIds);
+      openBulkComposeModal(selectedIds);
     });
 
     document.querySelectorAll('.email-btn').forEach(btn => {
@@ -1251,7 +1455,7 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
     });
   }
 
-  function openBulkScheduleModal(selectedIds) {
+  function openBulkComposeModal(selectedIds) {
     if (state.templates.length === 0) {
       alert("You need to create an Email Template first!");
       route('/templates');
@@ -1263,46 +1467,37 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
     ).join('');
     
     const bodyHtml = `
-      <div style="margin-bottom:1rem;">You are about to schedule emails for <strong>${selectedIds.length}</strong> professor(s).</div>
+      <div style="margin-bottom:1rem;">You are about to compose emails for <strong>${selectedIds.length}</strong> professor(s).</div>
       <div class="form-group">
         <label class="form-label">Select Template</label>
         <select class="form-input" id="bulk-template-select">
           ${templateOptions}
         </select>
       </div>
-      <div class="form-group">
-        <label class="form-label">Schedule Date & Time</label>
-        <input type="datetime-local" class="form-input" id="bulk-schedule-time">
+      <div style="font-size: 0.85rem; color: var(--text-muted);">
+        The template will automatically resolve merge tags like {{prof_lastName}} for each professor.<br>
+        Emails will be sent directly via your Gmail account with a 2-second delay between each to avoid rate limits.
       </div>
     `;
     
     const footerHtml = `
       <button class="btn btn-secondary" id="modal-cancel-bulk-btn">Cancel</button>
-      <button class="btn btn-primary" id="modal-confirm-bulk-btn" style="background:var(--accent-4);">Confirm Bulk Schedule</button>
+      <button class="btn btn-secondary" id="modal-bulk-draft-btn">Save as Drafts</button>
+      <button class="btn btn-primary" id="modal-confirm-bulk-btn" style="background:var(--accent-4);">📧 Send All Now</button>
     `;
     
-    openModal('Bulk Schedule Emails', bodyHtml, footerHtml);
+    openModal('Bulk Compose Emails', bodyHtml, footerHtml);
     
     document.getElementById('modal-cancel-bulk-btn').addEventListener('click', closeModal);
-    document.getElementById('modal-confirm-bulk-btn').addEventListener('click', async (e) => {
-      const scheduleVal = document.getElementById('bulk-schedule-time').value;
-      if (!scheduleVal) {
-        alert("Please select a date and time for bulk scheduling.");
-        return;
-      }
-      
-      const sendAtMs = new Date(scheduleVal).getTime();
-      if (sendAtMs <= Date.now()) {
-        alert("Scheduled time must be in the future.");
-        return;
-      }
-      
+    
+    const processBulk = async (isDraft, e) => {
       const templateId = document.getElementById('bulk-template-select').value;
       const template = state.templates.find(t => t.id === templateId);
       
       const btn = e.target;
       btn.disabled = true;
-      btn.innerHTML = '<span class="btn-spinner"></span> Scheduling...';
+      const origText = btn.textContent;
+      btn.innerHTML = '<span class="btn-spinner"></span> Processing...';
       
       let successCount = 0;
       
@@ -1310,17 +1505,20 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
         const app = state.applications[appId];
         if (!app) continue;
         const prof = app.prof;
-        const profAreasStr = prof.ar.slice(0,2).map(getAreaLabel).join(' and ');
+        const profAreasStr = prof.ar.slice(0,2).map(getAreaLabel).join(', ');
         
         let subject = template.subject;
         let body = template.body;
+        const parts = prof.n.split(' ');
         const context = {
           my_name: state.settings.userName || '[Your Name]',
           my_background: state.settings.userBackground || '[Your Background]',
-          prof_lastName: prof.n.split(' ').pop(),
-          prof_fullName: prof.n,
+          prof_name: prof.n,
+          prof_lastName: parts[parts.length - 1] || '',
+          prof_firstName: parts[0] || '',
           univ_name: prof.a,
-          research_area: profAreasStr
+          research_area: profAreasStr,
+          paper_title: ''
         };
         for (const [key, val] of Object.entries(context)) {
           const regex = new RegExp(`{{${key}}}`, 'g');
@@ -1331,37 +1529,66 @@ Instructions: Draft the cold email. Do not use bracketed placeholders.
         const fakeEmail = prof.n.toLowerCase().replace(/[^a-zA-Z0-9]+/g, '.').replace(/^\.+|\.+$/g, '') + '@example.edu';
         
         try {
-          const response = await fetch('/api/send-email', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              to: fakeEmail,
-              profName: prof.n,
-              subject: subject,
-              body: body,
-              sendAt: sendAtMs
-            })
+          if (isDraft) {
+            await GmailService.createDraft(fakeEmail, subject, body);
+          } else {
+            await GmailService.send(fakeEmail, subject, body);
+          }
+          
+          state.outbox.unshift({
+            id: generateId(),
+            to: fakeEmail,
+            profName: prof.n,
+            subject: subject,
+            status: isDraft ? 'draft' : 'sent',
+            createdAt: Date.now()
           });
-          if (response.ok) successCount++;
+          
+          if (!isDraft) {
+            state.applications[appId].status = 'contacted';
+          }
+          successCount++;
+          
+          // 2 second delay
+          await new Promise(r => setTimeout(r, 2000));
         } catch(err) {
-          console.error("Failed to bulk schedule for " + prof.n, err);
+          console.error("Failed to bulk process for " + prof.n, err);
         }
       }
       
-      alert(`Successfully scheduled ${successCount} out of ${selectedIds.length} emails! They will appear in your Mail tab and Gmail Drafts.`);
-      
-      for (const appId of selectedIds) {
-        if (state.applications[appId]) {
-          state.applications[appId].status = 'contacted';
-        }
-      }
+      saveOutbox();
       saveApplications();
+      
+      alert(`Successfully processed ${successCount} out of ${selectedIds.length} emails! They will appear in your Mail tab and Gmail.`);
       route();
       closeModal();
-    });
+    };
+    
+    document.getElementById('modal-bulk-draft-btn').addEventListener('click', (e) => processBulk(true, e));
+    document.getElementById('modal-confirm-bulk-btn').addEventListener('click', (e) => processBulk(false, e));
   }
 
   // ===== Initialize =====
   window.addEventListener('hashchange', route);
+  
+  // Google Auth init
+  const signinBtn = document.getElementById('google-signin-btn');
+  if (signinBtn) {
+    signinBtn.addEventListener('click', () => {
+      if (state.googleUser) {
+        if(confirm('Sign out of Google?')) GoogleAuth.signOut();
+      } else {
+        GoogleAuth.requestToken().then(() => alert('Successfully signed in!')).catch(e => console.error(e));
+      }
+    });
+  }
+  // Wait for GIS script to load before init
+  const checkGoogle = setInterval(() => {
+    if (typeof google !== 'undefined' && google.accounts) {
+      clearInterval(checkGoogle);
+      GoogleAuth.init();
+    }
+  }, 100);
+
   loadData();
 })();

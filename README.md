@@ -24,9 +24,10 @@ Both local datasets are included as git submodules under `data/`.
 
 - 🔍 **Global Discovery**: Search locally through 34,000+ CS faculty or toggle "Global STEM" to search millions of non-CS faculty live via OpenAlex.
 - 💰 **Stipend Dashboard**: Compare PhD stipends vs. living costs across 82 top US universities.
-- 🤖 **AI Email Generator**: Select a professor, pick a template, and instantly generate a highly personalized cold email using OpenAI's GPT-4o.
-- 📬 **Local SMTP & IMAP Sync**: Schedule emails to be sent at specific times right from your machine. Emails are automatically pushed to your Gmail `ProfScout Scheduled` and `ProfScout Sent` folders to stay perfectly in sync.
-- 📋 **Application Kanban Tracker**: Save professors to a Trello-style board and drag-and-drop them across stages (Saved, Contacted, Interviewing, Accepted).
+- 🤖 **AI Email Generator**: Select a professor, pick a template, and instantly generate a highly personalized cold email using your preferred LLM (Google Gemini, OpenAI, or Anthropic).
+- 📬 **Gmail Integration**: Securely sign in with Google to send generated emails instantly from your own Gmail account with one click (no SMTP configuration required!).
+- 📋 **Application Kanban Tracker**: Save professors to a Trello-style board and drag-and-drop them across stages.
+- ☁️ **Cloud Sync**: All your tracked data, custom email templates, and settings are automatically, privately backed up to your Google Drive AppData folder so they seamlessly sync across all your devices.
 
 ---
 
@@ -111,22 +112,19 @@ ProfScout Data Pipeline
 ============================================================
 ```
 
-### 4. Start the Backend Server
+### 4. Start the Local Server
 
-ProfScout runs a fast, lightweight FastAPI backend to serve the web UI and manage your local SQLite database (for saving your tracked professors, email templates, and SMTP credentials).
+ProfScout is a 100% serverless, client-side application. You just need a simple HTTP server to serve the static frontend files.
 
 ```bash
-# Windows
-.venv\Scripts\python.exe scripts\serve.py
-
-# macOS/Linux
-python scripts/serve.py
+# Windows / macOS / Linux
+python -m http.server 8081 --directory public
 ```
 
 ### 5. Open in Browser
 
-Navigate to **http://localhost:8080** and start exploring! 
-Go to **Settings** in the top right to configure your OpenAI API Key and Gmail SMTP settings so you can generate and send emails directly from the app!
+Navigate to **http://localhost:8081** or **http://127.0.0.1:8081** and start exploring! 
+Click **"Sign in with Google"** to enable 1-click email sending and automatic Google Drive cloud backups. Go to **Settings** to add your API Key for AI features (OpenAI, Anthropic, or Gemini).
 
 ---
 
@@ -140,9 +138,8 @@ profscout/
 │   ├── CSrankings/          # Faculty & publication data
 │   └── CSStipendRankings/   # Stipend & living cost data
 ├── scripts/
-│   ├── build_data.py        # CSV → JSON data pipeline
-│   └── serve.py             # FastAPI backend server (port 8080)
-└── public/                  # Static frontend (served by FastAPI)
+│   └── build_data.py        # CSV → JSON data pipeline
+└── public/                  # Static frontend (served via HTTP)
     ├── index.html           # Main HTML shell
     ├── data/                # Generated JSON files (from build_data.py)
     │   ├── professors.json  # 34K+ professor records
