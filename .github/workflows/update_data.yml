@@ -37,7 +37,7 @@ jobs:
           # Add submodule updates and regenerated JSON files
           git add data/CSrankings
           git add data/CSStipendRankings
-          git add public/data/*.json
+          git add -f public/data/*.json
           
           # Only commit if there are changes
           if git diff --staged --quiet; then
