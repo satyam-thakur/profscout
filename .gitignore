@@ -13,7 +13,7 @@ venv/
 env/
 
 # Generated data (rebuild with: python scripts/build_data.py)
-public/data/*.json
+# public/data/*.json
 
 # OS files
 .DS_Store
