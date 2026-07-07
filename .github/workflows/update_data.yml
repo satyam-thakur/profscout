@@ -6,10 +6,14 @@ on:
     - cron: '0 0 * * 0'
   workflow_dispatch: # Allow manual trigger from GitHub UI
 
+# Allow the workflow's GITHUB_TOKEN to push the auto-update commit back to the repo.
+permissions:
+  contents: write
+
 jobs:
   update-data:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -17,11 +21,13 @@ jobs:
           submodules: recursive
           fetch-depth: 0 # Need full history to push back
 
-      - name: Update submodules
+      - name: Configure Git identity (GitHub bot)
         run: |
           git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git submodule update --remote --merge
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Update submodules
+        run: git submodule update --remote --merge
 
       - name: Setup Python
         uses: actions/setup-python@v5
