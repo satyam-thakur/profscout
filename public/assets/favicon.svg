@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="ProfScout graduation cap">
+  <path d="M12 3 22 7.5 12 12 2 7.5z" fill="#4f46e5"/>
+  <path d="M6 9.6v3.9c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V9.6l-6 2.7z" fill="#4f46e5" opacity=".72"/>
+  <path d="M22 7.5v5.2" stroke="#f59e0b" stroke-width="1.1" stroke-linecap="round" fill="none"/>
+  <circle cx="22" cy="13.7" r="1.15" fill="#f59e0b"/>
+</svg>

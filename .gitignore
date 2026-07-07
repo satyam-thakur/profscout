@@ -38,3 +38,7 @@ Desktop.ini
 /CSrankings/
 /CSStipendRankings/
 /data/user_data.db
+
+# Local scratch / planning files (not required in the repo)
+/test_openalex.py
+/PLAN.md
