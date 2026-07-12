@@ -158,7 +158,7 @@ profscout/
 Pull the latest upstream data and rebuild:
 
 ```bash
-git submodule update --remote --merge
+git submodule update --init --recursive --remote
 python scripts/build_data.py
 ```
 
