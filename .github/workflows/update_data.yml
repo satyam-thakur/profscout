@@ -50,5 +50,5 @@ jobs:
             echo "No changes to commit."
           else
             git commit -m "chore: auto-update CSrankings data and rebuild JSON"
-            git push origin dev
+            git push origin HEAD:${GITHUB_REF_NAME}
           fi
